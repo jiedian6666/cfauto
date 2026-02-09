@@ -1,14 +1,9 @@
 /**
- * Cloudflare Worker 多项目部署管理器 (V7.5.1 ProxyIP Fixed)
- * * 版本特性：
- * 1. [修复] 补全了丢失的 ProxyIP 列表 (欧洲/北美/亚洲全量)。
- * 2. [收藏夹] 支持将特定版本加入收藏，永久置顶。
- * 3. [动态历史] 支持前端自定义获取历史版本的数量 (Limit)。
- * 4. [完全展开] 代码无任何压缩，逻辑清晰可见。
+ * Cloudflare Worker 多项目部署管理器 (V9.8)
  */
 
 // ==========================================
-// 1. 项目模板配置
+// 1. 项目模板与配置常量
 // ==========================================
 const TEMPLATES = {
     'cmliu': {
@@ -43,175 +38,180 @@ const TEMPLATES = {
     }
   };
   
+  // [全量补全] ProxyIP 列表 (含港/日/韩/新/美/欧)
+  const ECH_PROXIES = [
+      {group:"Global", list:["ProxyIP.CMLiussss.net", "ProxyIP.Aliyun.CMLiussss.net", "ProxyIP.Oracle.CMLiussss.net"]},
+      {group:"HK (香港)", list:["ProxyIP.HK.CMLiussss.net", "ProxyIP.Aliyun.HK.CMLiussss.net", "ProxyIP.Oracle.HK.CMLiussss.net"]},
+      {group:"JP (日本)", list:["ProxyIP.JP.CMLiussss.net", "ProxyIP.Aliyun.JP.CMLiussss.net", "ProxyIP.Oracle.JP.CMLiussss.net"]},
+      {group:"SG (新加坡)", list:["ProxyIP.SG.CMLiussss.net", "ProxyIP.Aliyun.SG.CMLiussss.net", "ProxyIP.Oracle.SG.CMLiussss.net"]},
+      {group:"KR (韩国)", list:["ProxyIP.KR.CMLiussss.net", "ProxyIP.Oracle.KR.CMLiussss.net"]},
+      {group:"US (美国)", list:["ProxyIP.US.CMLiussss.net", "ProxyIP.Aliyun.US.CMLiussss.net", "ProxyIP.Oracle.US.CMLiussss.net"]},
+      {group:"Europe", list:["ProxyIP.DE.CMLiussss.net (德国)", "ProxyIP.UK.CMLiussss.net (英国)", "ProxyIP.FR.CMLiussss.net (法国)", "ProxyIP.NL.CMLiussss.net (荷兰)", "ProxyIP.RU.CMLiussss.net (俄罗斯)"]},
+      {group:"Others", list:["ProxyIP.TW.CMLiussss.net (台湾)", "ProxyIP.AU.CMLiussss.net (澳洲)", "ProxyIP.IN.CMLiussss.net (印度)"]}
+  ];
+  
   export default {
     // ================= 定时任务 (Cron) =================
     async scheduled(event, env, ctx) {
-      ctx.waitUntil(handleCronJob(env));
+      if (env.CONFIG_KV) {
+          ctx.waitUntil(handleCronJob(env));
+      }
     },
   
     // ================= HTTP 请求入口 =================
     async fetch(request, env) {
-      const url = new URL(request.url);
-      const correctCode = env.ACCESS_CODE; 
-      const urlCode = url.searchParams.get("code");
-      const cookieHeader = request.headers.get("Cookie") || "";
-      
-      // PWA Manifest 配置
-      if (url.pathname === "/manifest.json") {
-          return new Response(JSON.stringify({
-              "name": "Worker 中控 Pro",
-              "short_name": "WorkerPro",
-              "start_url": "/",
-              "display": "standalone",
-              "background_color": "#f3f4f6",
-              "theme_color": "#1e293b",
-              "icons": [{ "src": "https://www.cloudflare.com/img/logo-cloudflare-dark.svg", "sizes": "192x192", "type": "image/svg+xml" }]
-          }), { headers: { "Content-Type": "application/json" } });
-      }
-
-      // 登录验证逻辑
-      if (correctCode && !cookieHeader.includes(`auth=${correctCode}`) && urlCode !== correctCode) {
-        return new Response(loginHtml(), { headers: { "Content-Type": "text/html;charset=UTF-8" } });
-      }
-  
-      // 常量定义
-      const ACCOUNTS_KEY = `ACCOUNTS_UNIFIED_STORAGE`; 
-      const GLOBAL_CONFIG_KEY = `AUTO_UPDATE_CFG_GLOBAL`;
-  
-      // API: 账号管理
-      if (url.pathname === "/api/accounts") {
-        if (request.method === "GET") {
-            return new Response(await env.CONFIG_KV.get(ACCOUNTS_KEY) || "[]", { headers: { "Content-Type": "application/json" } });
-        }
-        if (request.method === "POST") {
-            await env.CONFIG_KV.put(ACCOUNTS_KEY, JSON.stringify(await request.json()));
-            return new Response(JSON.stringify({ success: true }));
-        }
-      }
-  
-      // API: 变量管理
-      if (url.pathname === "/api/settings") {
-        const type = url.searchParams.get("type");
-        const VARS_KEY = `VARS_${type}`;
-        if (request.method === "GET") {
-            return new Response(await env.CONFIG_KV.get(VARS_KEY) || "null", { headers: { "Content-Type": "application/json" } });
-        }
-        if (request.method === "POST") {
-            await env.CONFIG_KV.put(VARS_KEY, JSON.stringify(await request.json()));
-            return new Response(JSON.stringify({ success: true }));
-        }
-      }
-
-      // API: 获取部署状态 (判断是否锁定)
-      if (url.pathname === "/api/deploy_config") {
-          const type = url.searchParams.get("type");
-          const key = `DEPLOY_CONFIG_${type}`;
-          const defaultCfg = { mode: 'latest', currentSha: null, deployTime: null };
-          const stored = await env.CONFIG_KV.get(key);
-          return new Response(stored || JSON.stringify(defaultCfg), { headers: { "Content-Type": "application/json" } });
-      }
-      
-      // API: 收藏夹管理
-      if (url.pathname === "/api/favorites") {
-          const type = url.searchParams.get("type");
-          const key = `FAVORITES_${type}`;
-          
-          if (request.method === "GET") {
-              return new Response(await env.CONFIG_KV.get(key) || "[]", { headers: { "Content-Type": "application/json" } });
+      try {
+          // [核心检查] 防止 KV 未绑定导致的 1101
+          if (!env.CONFIG_KV) {
+              return new Response(`
+                  <html><body style="font-family: sans-serif; text-align: center; padding: 50px;">
+                  <h1 style="color: red;">配置错误 (KV Not Bound)</h1>
+                  <p>检测到 Worker 未绑定 KV 命名空间，导致无法运行。</p>
+                  <p>请到 Cloudflare Dashboard -> Settings -> Variables -> KV Namespace Bindings</p>
+                  <p>绑定一个 KV，变量名必须设置为: <strong>CONFIG_KV</strong></p>
+                  </body></html>
+              `, { status: 500, headers: { "Content-Type": "text/html;charset=utf-8" } });
           }
+
+          const url = new URL(request.url);
+          const correctCode = env.ACCESS_CODE; 
+          const urlCode = url.searchParams.get("code");
+          const cookieHeader = request.headers.get("Cookie") || "";
           
-          if (request.method === "POST") {
-              const { action, item } = await request.json();
-              let favs = JSON.parse(await env.CONFIG_KV.get(key) || "[]");
-              
-              if (action === 'add') {
-                  if (!favs.find(f => f.sha === item.sha)) {
-                      favs.unshift(item); // 添加到头部
-                  }
-              } else if (action === 'remove') {
-                  favs = favs.filter(f => f.sha !== item.sha);
+          // PWA Manifest
+          if (url.pathname === "/manifest.json") {
+              return new Response(JSON.stringify({
+                  "name": "Worker Pro",
+                  "short_name": "WorkerPro",
+                  "start_url": "/",
+                  "display": "standalone",
+                  "background_color": "#f3f4f6",
+                  "theme_color": "#1e293b",
+                  "icons": [{ "src": "https://www.cloudflare.com/img/logo-cloudflare-dark.svg", "sizes": "192x192", "type": "image/svg+xml" }]
+              }), { headers: { "Content-Type": "application/json" } });
+          }
+    
+          // 登录验证
+          if (correctCode && !cookieHeader.includes(`auth=${correctCode}`) && urlCode !== correctCode) {
+            return new Response(loginHtml(), { headers: { "Content-Type": "text/html;charset=UTF-8" } });
+          }
+      
+          const ACCOUNTS_KEY = `ACCOUNTS_UNIFIED_STORAGE`; 
+          const GLOBAL_CONFIG_KEY = `AUTO_UPDATE_CFG_GLOBAL`;
+      
+          // API 路由分发
+          if (url.pathname === "/api/accounts") {
+            if (request.method === "GET") return new Response(await env.CONFIG_KV.get(ACCOUNTS_KEY) || "[]", { headers: { "Content-Type": "application/json" } });
+            if (request.method === "POST") { await env.CONFIG_KV.put(ACCOUNTS_KEY, JSON.stringify(await request.json())); return new Response(JSON.stringify({ success: true })); }
+          }
+          if (url.pathname === "/api/settings") {
+            const type = url.searchParams.get("type");
+            const VARS_KEY = `VARS_${type}`;
+            if (request.method === "GET") return new Response(await env.CONFIG_KV.get(VARS_KEY) || "null", { headers: { "Content-Type": "application/json" } });
+            if (request.method === "POST") { await env.CONFIG_KV.put(VARS_KEY, JSON.stringify(await request.json())); return new Response(JSON.stringify({ success: true })); }
+          }
+          if (url.pathname === "/api/deploy_config") {
+              const type = url.searchParams.get("type");
+              const key = `DEPLOY_CONFIG_${type}`;
+              const defaultCfg = { mode: 'latest', currentSha: null, deployTime: null };
+              return new Response(await env.CONFIG_KV.get(key) || JSON.stringify(defaultCfg), { headers: { "Content-Type": "application/json" } });
+          }
+          if (url.pathname === "/api/favorites") {
+              const type = url.searchParams.get("type");
+              const key = `FAVORITES_${type}`;
+              if (request.method === "GET") return new Response(await env.CONFIG_KV.get(key) || "[]", { headers: { "Content-Type": "application/json" } });
+              if (request.method === "POST") {
+                  const { action, item } = await request.json();
+                  let favs = JSON.parse(await env.CONFIG_KV.get(key) || "[]");
+                  if (action === 'add') { if (!favs.find(f => f.sha === item.sha)) favs.unshift(item); } 
+                  else if (action === 'remove') { favs = favs.filter(f => f.sha !== item.sha); }
+                  await env.CONFIG_KV.put(key, JSON.stringify(favs));
+                  return new Response(JSON.stringify({ success: true, favorites: favs }), { headers: { "Content-Type": "application/json" } });
               }
-              
-              await env.CONFIG_KV.put(key, JSON.stringify(favs));
-              return new Response(JSON.stringify({ success: true, favorites: favs }), { headers: { "Content-Type": "application/json" } });
           }
+          if (url.pathname === "/api/auto_config") {
+            if (request.method === "GET") return new Response(await env.CONFIG_KV.get(GLOBAL_CONFIG_KEY) || "{}", { headers: { "Content-Type": "application/json" } });
+            if (request.method === "POST") {
+                const body = await request.json();
+                await env.CONFIG_KV.put(GLOBAL_CONFIG_KEY, JSON.stringify(body));
+                return new Response(JSON.stringify({ success: true }));
+            }
+          }
+          if (url.pathname === "/api/check_update") {
+              const { type, mode, limit } = Object.fromEntries(url.searchParams);
+              return await handleCheckUpdate(env, type, mode, limit || 10);
+          }
+          // 部署相关 API
+          if (url.pathname === "/api/deploy" && request.method === "POST") {
+            const { type, variables, deletedVariables, targetSha } = await request.json();
+            return await handleManualDeploy(env, type, variables, deletedVariables, ACCOUNTS_KEY, targetSha);
+          }
+          if (url.pathname === "/api/batch_deploy" && request.method === "POST") {
+            const data = await request.json(); 
+            return await handleBatchDeploy(env, data, ACCOUNTS_KEY);
+          }
+          // 账号/域名管理 API
+          if (url.pathname === "/api/zones" && request.method === "POST") {
+              const { accountId, email, globalKey } = await request.json();
+              return await handleGetZones(accountId, email, globalKey);
+          }
+          if (url.pathname === "/api/all_workers" && request.method === "POST") {
+              const { accountId, email, globalKey } = await request.json();
+              return await handleGetAllWorkers(accountId, email, globalKey);
+          }
+          // [重要] 删除 Worker API
+          if (url.pathname === "/api/delete_worker" && request.method === "POST") {
+              const { accountId, email, globalKey, workerName, deleteKv } = await request.json();
+              return await handleDeleteWorker(accountId, email, globalKey, workerName, deleteKv);
+          }
+          if (url.pathname === "/api/stats") return await handleStats(env, ACCOUNTS_KEY);
+          if (url.pathname === "/api/fetch_bindings" && request.method === "POST") {
+              const { accountId, email, globalKey, workerName } = await request.json();
+              return await handleFetchBindings(accountId, email, globalKey, workerName);
+          }
+      
+          const response = new Response(mainHtml(), { headers: { "Content-Type": "text/html;charset=UTF-8" } });
+          if (urlCode === correctCode && correctCode) {
+            response.headers.set("Set-Cookie", `auth=${correctCode}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax`);
+          }
+          return response;
+
+      } catch (err) {
+          // 全局异常捕获
+          return new Response(`
+              <html><body style="font-family: monospace; padding: 20px; background: #fff0f0; color: #cc0000;">
+              <h1>System Error (Protection Mode)</h1>
+              <p>Manager Worker encountered an exception:</p>
+              <pre style="background: #fff; padding: 15px; border: 1px solid #ffcccc;">${err.message}\n\n${err.stack}</pre>
+              </body></html>
+          `, { status: 500, headers: { "Content-Type": "text/html" } });
       }
-  
-      // API: 全局自动配置
-      if (url.pathname === "/api/auto_config") {
-        if (request.method === "GET") {
-            return new Response(await env.CONFIG_KV.get(GLOBAL_CONFIG_KEY) || "{}", { headers: { "Content-Type": "application/json" } });
-        }
-        if (request.method === "POST") {
-            const body = await request.json();
-            const oldCfg = JSON.parse(await env.CONFIG_KV.get(GLOBAL_CONFIG_KEY) || "{}");
-            // 保留上次检查时间
-            body.lastCheck = oldCfg.lastCheck || 0; 
-            await env.CONFIG_KV.put(GLOBAL_CONFIG_KEY, JSON.stringify(body));
-            return new Response(JSON.stringify({ success: true }));
-        }
-      }
-  
-      // API: 检查更新 (支持 limit 参数)
-      if (url.pathname === "/api/check_update") {
-          const type = url.searchParams.get("type");
-          const mode = url.searchParams.get("mode"); // 'latest' or 'history'
-          const limit = url.searchParams.get("limit") || 10;
-          return await handleCheckUpdate(env, type, mode, limit);
-      }
-  
-      // API: 部署 (支持指定 SHA)
-      if (url.pathname === "/api/deploy" && request.method === "POST") {
-        const type = url.searchParams.get("type");
-        const { variables, deletedVariables, targetSha } = await request.json();
-        return await handleManualDeploy(env, type, variables, deletedVariables, ACCOUNTS_KEY, targetSha);
-      }
-  
-      // API: 统计
-      if (url.pathname === "/api/stats") {
-          return await handleStats(env, ACCOUNTS_KEY);
-      }
-  
-      // API: 读取线上变量
-      if (url.pathname === "/api/fetch_bindings" && request.method === "POST") {
-          const { accountId, apiToken, workerName } = await request.json();
-          return await handleFetchBindings(accountId, apiToken, workerName);
-      }
-  
-      // API: 删除线上变量
-      if (url.pathname === "/api/delete_binding" && request.method === "POST") {
-          const data = await request.json();
-          return await handleDeleteBinding(env, data);
-      }
-  
-      const response = new Response(mainHtml(), { headers: { "Content-Type": "text/html;charset=UTF-8" } });
-      if (urlCode === correctCode && correctCode) {
-        response.headers.set("Set-Cookie", `auth=${correctCode}; Path=/; HttpOnly; Max-Age=86400; SameSite=Lax`);
-      }
-      return response;
     }
   };
   
   // ================= 辅助函数区 =================
   
-  // 构造 GitHub URL
   function getGithubUrls(type, sha = null) {
       const t = TEMPLATES[type];
       const safePath = t.ghPath.split('/').map(p => encodeURIComponent(p)).join('/');
       const apiUrl = `https://api.github.com/repos/${t.ghUser}/${t.ghRepo}/commits`;
-      
-      // 这里的 ref：如果没有传入 SHA，则使用分支名(Latest)；如果有 SHA，则使用 SHA(Fixed)
       const ref = sha || t.ghBranch;
       const scriptUrl = `https://raw.githubusercontent.com/${t.ghUser}/${t.ghRepo}/${ref}/${safePath}`;
-      
       return { apiUrl, scriptUrl, branch: t.ghBranch };
   }
 
-  // Cron 任务 (熔断时遵守版本锁定)
+  function getAuthHeaders(email, key) {
+      return { "X-Auth-Email": email, "X-Auth-Key": key, "Content-Type": "application/json" };
+  }
+
+  // [Error 808 修复] 上传专用鉴权头
+  function getUploadHeaders(email, key) {
+      return { "X-Auth-Email": email, "X-Auth-Key": key };
+  }
+
   async function handleCronJob(env) {
       const ACCOUNTS_KEY = `ACCOUNTS_UNIFIED_STORAGE`;
       const GLOBAL_CONFIG_KEY = `AUTO_UPDATE_CFG_GLOBAL`;
-      
       const configStr = await env.CONFIG_KV.get(GLOBAL_CONFIG_KEY);
       if (!configStr) return;
       const config = JSON.parse(configStr);
@@ -219,11 +219,9 @@ const TEMPLATES = {
   
       const now = Date.now();
       const lastCheck = config.lastCheck || 0;
-      const intervalVal = parseInt(config.interval) || 30;
-      const intervalMs = intervalVal * 60 * 1000;
+      const intervalMs = (parseInt(config.interval) || 30) * 60 * 1000;
   
       if (now - lastCheck <= intervalMs) return;
-      console.log(`[Cron] 🕒 Global Check Started.`);
       
       const accounts = JSON.parse(await env.CONFIG_KV.get(ACCOUNTS_KEY) || "[]");
       if (accounts.length === 0) return;
@@ -231,17 +229,13 @@ const TEMPLATES = {
       const statsData = await fetchInternalStats(accounts);
       let actionTaken = false;
   
-      // === 熔断逻辑 ===
       const fuseThreshold = parseInt(config.fuseThreshold || 0);
       if (fuseThreshold > 0) {
           for (const acc of accounts) {
               const stat = statsData.find(s => s.alias === acc.alias);
               if (!stat || stat.error) continue;
               const limit = stat.max || 100000;
-              const usedPercent = (stat.total / limit) * 100;
-              
-              if (usedPercent >= fuseThreshold) {
-                  // 熔断时，严格遵守当前的部署版本配置
+              if ((stat.total / limit) * 100 >= fuseThreshold) {
                   await rotateUUIDAndDeploy(env, 'cmliu', accounts, ACCOUNTS_KEY);
                   await rotateUUIDAndDeploy(env, 'joey', accounts, ACCOUNTS_KEY);
                   actionTaken = true;
@@ -250,7 +244,6 @@ const TEMPLATES = {
           }
       }
   
-      // === 自动更新逻辑 ===
       if (!actionTaken) {
           await Promise.all([
               checkAndDeployUpdate(env, 'cmliu', accounts, ACCOUNTS_KEY),
@@ -262,28 +255,22 @@ const TEMPLATES = {
       await env.CONFIG_KV.put(GLOBAL_CONFIG_KEY, JSON.stringify(config));
   }
   
-  // 检查并部署更新
   async function checkAndDeployUpdate(env, type, accounts, accountsKey) {
       try {
-          const deployConfigKey = `DEPLOY_CONFIG_${type}`;
-          const deployConfig = JSON.parse(await env.CONFIG_KV.get(deployConfigKey) || '{"mode":"latest"}');
-          if (deployConfig.mode === 'fixed') return; // 锁定模式不更新
+          const deployConfig = JSON.parse(await env.CONFIG_KV.get(`DEPLOY_CONFIG_${type}`) || '{"mode":"latest"}');
+          if (deployConfig.mode === 'fixed') return; 
   
-          const VERSION_KEY = `VERSION_INFO_${type}`;
           const res = await handleCheckUpdate(env, type, 'latest');
           const checkData = await res.json();
           
           if (checkData.remote && (!checkData.local || checkData.remote.sha !== checkData.local.sha)) {
-              const VARS_KEY = `VARS_${type}`;
-              const varsStr = await env.CONFIG_KV.get(VARS_KEY);
+              const varsStr = await env.CONFIG_KV.get(`VARS_${type}`);
               const variables = varsStr ? JSON.parse(varsStr) : [];
-              // 自动更新强制使用 'latest'
               await coreDeployLogic(env, type, variables, [], accountsKey, 'latest');
           }
       } catch(e) { console.error(`[Update Error] ${type}: ${e.message}`); }
   }
   
-  // 旋转 UUID 并部署 (熔断专用)
   async function rotateUUIDAndDeploy(env, type, accounts, accountsKey) {
       const VARS_KEY = `VARS_${type}`;
       const varsStr = await env.CONFIG_KV.get(VARS_KEY);
@@ -291,7 +278,6 @@ const TEMPLATES = {
       const uuidField = TEMPLATES[type].uuidField;
       if (!uuidField) return; 
   
-      // 1. 更新 UUID
       let uuidUpdated = false;
       variables = variables.map(v => {
           if (v.key === uuidField) { v.value = crypto.randomUUID(); uuidUpdated = true; }
@@ -300,40 +286,26 @@ const TEMPLATES = {
       if (!uuidUpdated) variables.push({ key: uuidField, value: crypto.randomUUID() });
       await env.CONFIG_KV.put(VARS_KEY, JSON.stringify(variables));
   
-      // 2. 获取当前部署策略
-      const deployConfigKey = `DEPLOY_CONFIG_${type}`;
-      const deployConfig = JSON.parse(await env.CONFIG_KV.get(deployConfigKey) || '{"mode":"latest"}');
+      const deployConfig = JSON.parse(await env.CONFIG_KV.get(`DEPLOY_CONFIG_${type}`) || '{"mode":"latest"}');
       const targetSha = deployConfig.mode === 'fixed' ? deployConfig.currentSha : 'latest';
-      
-      // 3. 执行部署
       await coreDeployLogic(env, type, variables, [], accountsKey, targetSha);
   }
   
-  // 检查更新接口
   async function handleCheckUpdate(env, type, mode, limit = 10) {
       try {
           const VERSION_KEY = `VERSION_INFO_${type}`;
           const localData = JSON.parse(await env.CONFIG_KV.get(VERSION_KEY) || "null");
-          
           const { apiUrl, branch } = getGithubUrls(type);
           
-          let fetchUrl = apiUrl;
-          if (mode === 'history') {
-              fetchUrl += `?sha=${branch}&per_page=${limit}`; // 动态 Limit
-          } else {
-              fetchUrl += `?sha=${branch}&per_page=1`;
-          }
-          
+          let fetchUrl = apiUrl + (mode === 'history' ? `?sha=${branch}&per_page=${limit}` : `?sha=${branch}&per_page=1`);
           const headers = { "User-Agent": "Cloudflare-Worker-Manager" };
-          if (env.GITHUB_TOKEN && env.GITHUB_TOKEN.trim() !== "") headers["Authorization"] = `token ${env.GITHUB_TOKEN}`;
+          if (env.GITHUB_TOKEN) headers["Authorization"] = `token ${env.GITHUB_TOKEN}`;
   
           const ghRes = await fetch(fetchUrl + `&t=${Date.now()}`, { headers });
           if (!ghRes.ok) throw new Error(`GitHub API Error: ${ghRes.status}`);
           const ghData = await ghRes.json();
           
-          if (mode === 'history') {
-              return new Response(JSON.stringify({ history: ghData }), { headers: { "Content-Type": "application/json" } });
-          }
+          if (mode === 'history') return new Response(JSON.stringify({ history: ghData }), { headers: { "Content-Type": "application/json" } });
   
           const commitObj = Array.isArray(ghData) ? ghData[0] : ghData;
           return new Response(JSON.stringify({ 
@@ -343,43 +315,163 @@ const TEMPLATES = {
       } catch (e) { return new Response(JSON.stringify({ error: e.message }), { status: 500 }); }
   }
   
-  // 手动部署入口
   async function handleManualDeploy(env, type, variables, deletedVariables, accountsKey, targetSha) {
-      const actualSha = (targetSha === 'latest' || targetSha === '') ? null : targetSha;
-      const result = await coreDeployLogic(env, type, variables, deletedVariables, accountsKey, actualSha);
+      const result = await coreDeployLogic(env, type, variables, deletedVariables, accountsKey, targetSha);
       return new Response(JSON.stringify(result), { headers: { "Content-Type": "application/json" } });
   }
 
-  // 核心部署逻辑
+  // ================= 批量部署逻辑 (增强版) =================
+  async function handleBatchDeploy(env, reqData, accountsKey) {
+    const { template, workerName, kvName, config, targetAccounts, disableWorkersDev, customDomainPrefix } = reqData;
+    const allAccounts = JSON.parse(await env.CONFIG_KV.get(accountsKey) || "[]");
+    
+    const accountsToDeploy = allAccounts.filter(a => targetAccounts.includes(a.alias));
+    if (accountsToDeploy.length === 0) return new Response(JSON.stringify([{name:"错误", success:false, msg:"未选择有效账号"}]), {headers:{"Content-Type":"application/json"}});
+
+    const { scriptUrl } = getGithubUrls(template);
+    let scriptContent = "";
+    try {
+        const codeRes = await fetch(scriptUrl);
+        if(!codeRes.ok) throw new Error("代码拉取失败");
+        scriptContent = await codeRes.text();
+        if (template === 'joey') scriptContent = 'var window = globalThis;\n' + scriptContent;
+    } catch(e) {
+        return new Response(JSON.stringify([{name:"网络错误", success:false, msg:e.message}]), {headers:{"Content-Type":"application/json"}});
+    }
+
+    const logs = [];
+    let updatedAccounts = false;
+
+    for (const acc of accountsToDeploy) {
+        const log = { name: `${acc.alias} -> [${workerName}]`, success: false, msg: "" };
+        try {
+            const jsonHeaders = getAuthHeaders(acc.email, acc.globalKey);
+            
+            // 1. 获取/创建 KV
+            let nsId = "";
+            const nsListRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${acc.accountId}/storage/kv/namespaces?per_page=100`, {headers: jsonHeaders});
+            if (!nsListRes.ok) throw new Error("无法读取KV列表");
+            const nsList = (await nsListRes.json()).result;
+            const existNs = nsList.find(n => n.title === kvName);
+            
+            if (existNs) {
+                nsId = existNs.id;
+            } else {
+                const createNsRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${acc.accountId}/storage/kv/namespaces`, {
+                    method: 'POST', headers: jsonHeaders, body: JSON.stringify({title: kvName})
+                });
+                if(!createNsRes.ok) throw new Error("创建KV失败: " + (await createNsRes.json()).errors[0].message);
+                nsId = (await createNsRes.json()).result.id;
+            }
+
+            // 2. 准备 Bindings (含 UUID 自动填充)
+            const bindings = [];
+            if (template === 'cmliu') bindings.push({ name: "KV", type: "kv_namespace", namespace_id: nsId });
+            if (template === 'joey') bindings.push({ name: "C", type: "kv_namespace", namespace_id: nsId });
+
+            if (config.admin) bindings.push({ name: "ADMIN", type: "plain_text", text: config.admin });
+            if (template === 'joey' && config.uuid) bindings.push({ name: "u", type: "plain_text", text: config.uuid });
+            
+            const defaultVars = TEMPLATES[template].defaultVars;
+            defaultVars.forEach(key => {
+                if(key !== 'KV' && key !== 'C' && key !== 'ADMIN' && key !== 'u') {
+                    if (key === 'UUID') {
+                        bindings.push({ name: "UUID", type: "plain_text", text: config.uuid || crypto.randomUUID() });
+                    } else {
+                         bindings.push({ name: key, type: "plain_text", text: "" });
+                    }
+                }
+            });
+
+            // 3. 部署 Worker (使用 Upload Headers - Error 808 Fix)
+            const metadata = { main_module: "index.js", bindings: bindings, compatibility_date: "2024-01-01" };
+            const formData = new FormData();
+            formData.append("metadata", JSON.stringify(metadata));
+            formData.append("script", new Blob([scriptContent], { type: "application/javascript+module" }), "index.js");
+
+            const uploadHeaders = getUploadHeaders(acc.email, acc.globalKey);
+            const deployRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${acc.accountId}/workers/scripts/${workerName}`, {
+                method: "PUT", headers: uploadHeaders, body: formData
+            });
+
+            if (deployRes.ok) {
+                log.success = true;
+                let msgs = [];
+
+                // 4. 自定义域名
+                if (customDomainPrefix && acc.defaultZoneId && acc.defaultZoneName) {
+                    const hostname = `${customDomainPrefix}.${acc.defaultZoneName}`;
+                    const domainRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${acc.accountId}/workers/domains`, {
+                        method: "PUT", headers: jsonHeaders, 
+                        body: JSON.stringify({ hostname: hostname, service: workerName, zone_id: acc.defaultZoneId })
+                    });
+                    if (domainRes.ok) msgs.push(`✅ 绑定: https://${hostname}`);
+                    else msgs.push(`⚠️ 域名绑定失败`);
+                }
+
+                // 5. 默认域名开关
+                if (disableWorkersDev) {
+                    await fetch(`https://api.cloudflare.com/client/v4/accounts/${acc.accountId}/workers/scripts/${workerName}/subdomain`, {
+                        method: "POST", headers: jsonHeaders, body: JSON.stringify({ enabled: false })
+                    });
+                    msgs.push(`🚫 默认域名已禁用`);
+                } else {
+                    await fetch(`https://api.cloudflare.com/client/v4/accounts/${acc.accountId}/workers/scripts/${workerName}/subdomain`, {
+                        method: "POST", headers: jsonHeaders, body: JSON.stringify({ enabled: true })
+                    });
+                    const subRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${acc.accountId}/workers/subdomain`, { headers: jsonHeaders });
+                    const prefix = (await subRes.json()).result?.subdomain || "unknown";
+                    msgs.push(`✅ 默认: https://${workerName}.${prefix}.workers.dev`);
+                }
+
+                log.msg = msgs.join(" | ");
+
+                if (!acc[`workers_${template}`]) acc[`workers_${template}`] = [];
+                if (!acc[`workers_${template}`].includes(workerName)) {
+                    acc[`workers_${template}`].push(workerName);
+                    updatedAccounts = true;
+                }
+            } else {
+                log.msg = `❌ ${(await deployRes.json()).errors?.[0]?.message}`;
+            }
+
+        } catch(e) { log.msg = `❌ ${e.message}`; }
+        logs.push(log);
+    }
+
+    if (updatedAccounts) {
+        const finalAccounts = allAccounts.map(a => {
+            const updated = accountsToDeploy.find(u => u.alias === a.alias);
+            return updated ? updated : a;
+        });
+        await env.CONFIG_KV.put(accountsKey, JSON.stringify(finalAccounts));
+    }
+
+    return new Response(JSON.stringify(logs), { headers: { "Content-Type": "application/json" } });
+  }
+
   async function coreDeployLogic(env, type, variables, deletedVariables, accountsKey, targetSha) {
       try {
           const accounts = JSON.parse(await env.CONFIG_KV.get(accountsKey) || "[]");
           if (accounts.length === 0) return [{ name: "提示", success: false, msg: "无账号配置" }];
           
-          // 1. 获取代码链接
           const { scriptUrl, apiUrl } = getGithubUrls(type, targetSha);
           let githubScriptContent = "";
           let deployedSha = targetSha;
           
           try {
-              // 2. 拉取代码
               const codeRes = await fetch(scriptUrl + `?t=${Date.now()}`);
               if (!codeRes.ok) throw new Error(`代码下载失败: ${codeRes.status}`);
               githubScriptContent = await codeRes.text();
               
-              // 3. 补全 SHA
               if (!deployedSha) {
                   const headers = { "User-Agent": "CF-Worker" };
                   if (env.GITHUB_TOKEN) headers["Authorization"] = `token ${env.GITHUB_TOKEN}`;
                   const apiRes = await fetch(apiUrl + `?sha=${TEMPLATES[type].ghBranch}&per_page=1`, { headers });
-                  if (apiRes.ok) {
-                      const json = await apiRes.json();
-                      deployedSha = (Array.isArray(json) ? json[0] : json).sha;
-                  }
+                  if (apiRes.ok) deployedSha = (await apiRes.json())[0].sha;
               }
           } catch (e) { return [{ name: "网络错误", success: false, msg: e.message }]; }
   
-          // 4. 代码预处理
           if (type === 'joey') githubScriptContent = 'var window = globalThis;\n' + githubScriptContent;
           if (type === 'ech') {
              const proxyVar = variables ? variables.find(v => v.key === 'PROXYIP') : null;
@@ -389,18 +481,15 @@ const TEMPLATES = {
           }
   
           const logs = [];
-          let updateCount = 0;
-          
-          // 5. 遍历部署
           for (const acc of accounts) {
             const targetWorkers = acc[`workers_${type}`] || [];
             for (const wName of targetWorkers) {
-                updateCount++;
                 const logItem = { name: `${acc.alias} -> [${wName}]`, success: false, msg: "" };
                 try {
                   const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${acc.accountId}/workers/scripts/${wName}`;
-                  const headers = { "Authorization": `Bearer ${acc.apiToken}` };
-                  const bindingsRes = await fetch(`${baseUrl}/bindings`, { headers });
+                  const jsonHeaders = getAuthHeaders(acc.email, acc.globalKey);
+                  
+                  const bindingsRes = await fetch(`${baseUrl}/bindings`, { headers: jsonHeaders });
                   let currentBindings = bindingsRes.ok ? (await bindingsRes.json()).result : [];
                   if (deletedVariables && deletedVariables.length > 0) currentBindings = currentBindings.filter(b => !deletedVariables.includes(b.name));
                   
@@ -418,7 +507,9 @@ const TEMPLATES = {
                   const formData = new FormData();
                   formData.append("metadata", JSON.stringify(metadata));
                   formData.append("script", new Blob([githubScriptContent], { type: "application/javascript+module" }), "index.js");
-                  const updateRes = await fetch(baseUrl, { method: "PUT", headers, body: formData });
+                  
+                  const uploadHeaders = getUploadHeaders(acc.email, acc.globalKey);
+                  const updateRes = await fetch(baseUrl, { method: "PUT", headers: uploadHeaders, body: formData });
                   
                   if (updateRes.ok) { 
                       logItem.success = true; 
@@ -431,24 +522,18 @@ const TEMPLATES = {
             } 
           }
   
-          // 6. 保存状态
-          if (updateCount > 0 && deployedSha) {
+          if (deployedSha) {
               const VERSION_KEY = `VERSION_INFO_${type}`;
               await env.CONFIG_KV.put(VERSION_KEY, JSON.stringify({ sha: deployedSha, deployDate: new Date().toISOString() }));
               
               const DEPLOY_CONFIG_KEY = `DEPLOY_CONFIG_${type}`;
               const mode = targetSha ? 'fixed' : 'latest';
-              await env.CONFIG_KV.put(DEPLOY_CONFIG_KEY, JSON.stringify({
-                  mode: mode,
-                  currentSha: deployedSha,
-                  deployTime: new Date().toISOString()
-              }));
+              await env.CONFIG_KV.put(DEPLOY_CONFIG_KEY, JSON.stringify({ mode: mode, currentSha: deployedSha, deployTime: new Date().toISOString() }));
           }
           return logs;
       } catch (e) { return [{ name: "系统错误", success: false, msg: e.message }]; }
   }
   
-  // 统计功能
   async function fetchInternalStats(accounts) {
      const now = new Date();
      const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0));
@@ -460,7 +545,7 @@ const TEMPLATES = {
      return await Promise.all(accounts.map(async (acc) => {
        try {
          const res = await fetch("https://api.cloudflare.com/client/v4/graphql", {
-           method: "POST", headers: { "Authorization": `Bearer ${acc.apiToken}`, "Content-Type": "application/json" },
+           method: "POST", headers: getAuthHeaders(acc.email, acc.globalKey),
            body: JSON.stringify({ query: query, variables: { AccountID: acc.accountId, filter: { datetime_geq: todayStart.toISOString(), datetime_leq: now.toISOString() } } })
          });
          const data = await res.json();
@@ -481,10 +566,12 @@ const TEMPLATES = {
       } catch(e) { return new Response(JSON.stringify({ error: e.message }), { status: 500 }); }
   }
 
-  // 变量获取
-  async function handleFetchBindings({accountId, apiToken, workerName}) {
+  // [同步修复] 增加 fetch bindings 接口逻辑
+  async function handleFetchBindings(accountId, email, key, workerName) {
       try {
-          const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${workerName}/bindings`, { headers: { "Authorization": `Bearer ${apiToken}` } });
+          const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${workerName}/bindings`, { 
+              headers: getAuthHeaders(email, key)
+          });
           const data = await res.json();
           const bindings = data.result
               .filter(b => b.type === "plain_text" || b.type === "secret_text")
@@ -493,14 +580,68 @@ const TEMPLATES = {
       } catch(e) { return new Response(JSON.stringify({ success: false, msg: e.message }), { status: 500 }); }
   }
 
-  async function handleDeleteBinding(env, {accountId, apiToken, workerName, key, type}) {
-      return new Response(JSON.stringify({ success: false, msg: "请使用完整部署流程更新变量" }), { status: 200 }); 
+  // 获取 Zones
+  async function handleGetZones(accountId, email, key) {
+      try {
+          const res = await fetch(`https://api.cloudflare.com/client/v4/zones?account.id=${accountId}&per_page=50`, {
+              headers: getAuthHeaders(email, key)
+          });
+          const data = await res.json();
+          const zones = data.result.map(z => ({ id: z.id, name: z.name }));
+          return new Response(JSON.stringify({ success: true, zones: zones }), { headers: { "Content-Type": "application/json" } });
+      } catch (e) { return new Response(JSON.stringify({ success: false, msg: e.message }), { status: 500 }); }
+  }
+
+  async function handleGetAllWorkers(accountId, email, key) {
+      try {
+          const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts`, {
+              headers: getAuthHeaders(email, key)
+          });
+          const data = await res.json();
+          const workers = data.result.map(w => ({ 
+              id: w.id, 
+              created_on: w.created_on, 
+              modified_on: w.modified_on 
+          }));
+          return new Response(JSON.stringify({ success: true, workers: workers }), { headers: { "Content-Type": "application/json" } });
+      } catch (e) { return new Response(JSON.stringify({ success: false, msg: e.message }), { status: 500 }); }
+  }
+
+  // [修复] 删除 Worker 时同时删除 KV
+  async function handleDeleteWorker(accountId, email, key, workerName, deleteKv) {
+      try {
+          const headers = getAuthHeaders(email, key);
+          
+          if (deleteKv) {
+              const bindRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${workerName}/bindings`, { headers });
+              if (bindRes.ok) {
+                  const binds = (await bindRes.json()).result;
+                  const kvBinds = binds.filter(b => b.type === 'kv_namespace');
+                  for (const kv of kvBinds) {
+                      await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/storage/kv/namespaces/${kv.namespace_id}`, {
+                          method: "DELETE", headers
+                      });
+                  }
+              }
+          }
+
+          const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${workerName}`, {
+              method: "DELETE", headers
+          });
+          
+          if (res.ok) {
+              return new Response(JSON.stringify({ success: true }), { headers: { "Content-Type": "application/json" } });
+          } else {
+              const err = await res.json();
+              return new Response(JSON.stringify({ success: false, msg: err.errors[0]?.message || "删除失败" }), { status: 200 });
+          }
+      } catch (e) { return new Response(JSON.stringify({ success: false, msg: e.message }), { status: 500 }); }
   }
   
   function loginHtml() { return `<!DOCTYPE html><html><body style="display:flex;justify-content:center;align-items:center;height:100vh;background:#f3f4f6"><form method="GET"><input type="password" name="code" placeholder="密码" style="padding:10px"><button style="padding:10px">登录</button></form></body></html>`; }
   
   // ==========================================
-  // 2. 前端页面 (完全展开版 HTML)
+  // 2. 前端页面 (修复版：全量 HTML 内嵌)
   // ==========================================
   function mainHtml() {
     return `
@@ -510,8 +651,9 @@ const TEMPLATES = {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="manifest" href="/manifest.json">
-    <title>Worker 智能中控 (V7.5.1)</title>
+    <title>Worker 智能中控 (V9.6.1)</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <style>
       .input-field { border: 1px solid #cbd5e1; padding: 0.25rem 0.5rem; width:100%; border-radius: 4px; font-size: 0.8rem; } 
       .input-field:focus { border-color:#3b82f6; outline:none; }
@@ -521,6 +663,8 @@ const TEMPLATES = {
       .compact-table th { background-color: #f8fafc; color: #64748b; font-weight: 600; text-align: left; }
       ::-webkit-scrollbar { width: 6px; height: 6px; }
       ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+      .animate-fade-in { animation: fadeIn 0.3s ease-out; }
+      @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
     </style>
   </head>
   <body class="bg-slate-100 p-2 md:p-4 min-h-screen text-slate-700">
@@ -528,13 +672,13 @@ const TEMPLATES = {
       
       <header class="bg-white px-4 py-3 md:px-6 md:py-4 rounded shadow flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
           <div class="flex-none">
-              <h1 class="text-xl font-bold text-slate-800 flex items-center gap-2">🚀 Worker 部署中控 <span class="text-xs bg-purple-600 text-white px-2 py-0.5 rounded ml-2">V7.5.1</span></h1>
-              <div class="text-[10px] text-gray-400 mt-1">全局管理 · 收藏夹 · 动态历史 · 全量代理</div>
+              <h1 class="text-xl font-bold text-slate-800 flex items-center gap-2">🚀 Worker 部署中控 <span class="text-xs bg-purple-600 text-white px-2 py-0.5 rounded ml-2">V9.6.1</span></h1>
+              <div class="text-[10px] text-gray-400 mt-1">完整回档 · 功能修正</div>
           </div>
           <div id="logs" class="bg-slate-900 text-green-400 p-2 rounded text-xs font-mono hidden max-h-[80px] lg:max-h-[50px] overflow-y-auto shadow-inner w-full lg:flex-1 lg:mx-4 order-2 lg:order-none"></div>
           
           <div class="flex flex-wrap items-center gap-2 md:gap-3 bg-slate-50 p-2 rounded border border-slate-200 w-full lg:w-auto flex-none text-xs">
-               <button onclick="toggleLayout()" class="bg-white border text-gray-600 px-2 py-1 rounded hover:bg-gray-50">◫ 布局</button>
+               <button onclick="openBatchDeployModal()" class="bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700 font-bold">✨ 批量部署</button>
                <div class="w-px h-4 bg-gray-300 mx-1"></div>
                
                <div class="flex items-center gap-1">
@@ -547,14 +691,6 @@ const TEMPLATES = {
                <div class="flex items-center gap-1">
                   <input type="number" id="auto_update_interval" value="30" class="w-8 text-center border rounded py-0.5"><span>分</span>
                </div>
-               
-               <div class="w-px h-4 bg-gray-300 mx-1"></div>
-               <div class="flex items-center gap-1" title="获取 GitHub 历史提交的数量">
-                  <span class="font-bold text-gray-600">历史:</span>
-                  <input type="number" id="history_limit" value="10" placeholder="10" class="w-10 text-center border border-blue-200 bg-blue-50 rounded py-0.5 text-blue-600 font-bold">
-               </div>
-
-               <div class="w-px h-4 bg-gray-300 mx-1"></div>
                <div class="flex items-center gap-1">
                   <span class="text-red-600 font-bold">熔断:</span>
                   <input type="number" id="fuse_threshold" value="0" placeholder="0" class="w-8 text-center border border-red-300 bg-red-50 rounded py-0.5 font-bold text-red-600">
@@ -567,7 +703,7 @@ const TEMPLATES = {
         <div id="section_accounts" class="lg:col-span-7 space-y-4">
             <div class="bg-white p-4 rounded shadow flex-1">
               <div class="flex justify-between items-center mb-3">
-                   <h2 class="font-bold text-gray-700 text-sm">📡 账号列表 (按流量降序)</h2>
+                   <h2 class="font-bold text-gray-700 text-sm">📡 账号列表</h2>
                    <div class="flex gap-2">
                        <button onclick="loadStats()" id="btn_stats" class="text-[10px] bg-indigo-50 text-indigo-600 px-2 py-1 rounded font-bold hover:bg-indigo-100">🔄 刷新用量</button>
                        <button onclick="resetFormForAdd()" class="text-[10px] bg-blue-50 text-blue-600 px-2 py-1 rounded">➕ 添加账号</button>
@@ -576,35 +712,39 @@ const TEMPLATES = {
               
               <div id="account_form" class="hidden bg-slate-50 p-3 mb-3 border rounded text-xs space-y-3">
                  <div class="flex gap-2">
-                    <input id="in_alias" placeholder="备注" class="input-field w-1/3">
+                    <input id="in_alias" placeholder="备注 (Alias)" class="input-field w-1/3">
                     <input id="in_id" placeholder="Account ID" class="input-field w-2/3">
                  </div>
-                 <input id="in_token" type="password" placeholder="API Token" class="input-field">
+                 <div class="flex gap-2">
+                    <input id="in_email" placeholder="Login Email" class="input-field w-1/2">
+                    <input id="in_gkey" type="password" placeholder="Global API Key" class="input-field w-1/2">
+                 </div>
+                 <div class="bg-purple-50 p-2 rounded border border-purple-100 flex gap-2 items-center">
+                    <span class="text-purple-700 font-bold w-20">预设域名:</span>
+                    <select id="in_zone_select" class="input-field w-full" onchange="updateZoneInfo()">
+                        <option value="">(请先填写API信息后点击读取)</option>
+                    </select>
+                    <input type="hidden" id="in_zone_name">
+                    <input type="hidden" id="in_zone_id">
+                    <button onclick="fetchZonesForAccount()" class="bg-purple-600 text-white px-2 py-1 rounded hover:bg-purple-700 flex-none w-20">☁️ 读取</button>
+                 </div>
+
                  <div class="grid grid-cols-3 gap-2">
-                    <input id="in_workers_cmliu" placeholder="🔴 CMliu Worker" class="input-field bg-red-50">
-                    <input id="in_workers_joey" placeholder="🔵 Joey Worker" class="input-field bg-blue-50">
-                    <input id="in_workers_ech" placeholder="🟢 ECH Worker" class="input-field bg-green-50">
+                    <input id="in_workers_cmliu" placeholder="🔴 CMliu Worker (选填)" class="input-field bg-red-50">
+                    <input id="in_workers_joey" placeholder="🔵 Joey Worker (选填)" class="input-field bg-blue-50">
+                    <input id="in_workers_ech" placeholder="🟢 ECH Worker (选填)" class="input-field bg-green-50">
                  </div>
                  <div class="flex gap-2 pt-2">
                     <button onclick="saveAccount()" id="btn_save_acc" class="flex-1 bg-slate-700 text-white py-1.5 rounded font-bold">💾 保存账号</button>
                     <button onclick="deleteFromEdit()" id="btn_del_edit" class="hidden flex-none bg-red-100 text-red-600 px-3 py-1.5 rounded">🗑️</button>
                     <button onclick="cancelEdit()" class="flex-none bg-gray-200 text-gray-600 px-3 py-1.5 rounded">❌</button>
                  </div>
-                 <div id="edit_vars_section" class="hidden border-t pt-2 mt-2">
-                    <div id="edit_vars_container" class="space-y-2"></div>
-                 </div>
               </div>
               
               <div id="account_list_container" class="overflow-x-auto min-h-[300px]">
                   <table class="w-full compact-table">
                       <thead>
-                          <tr>
-                              <th>备注</th>
-                              <th>Worker</th>
-                              <th>流量</th>
-                              <th>占比</th>
-                              <th class="text-right">操作</th>
-                          </tr>
+                          <tr><th>备注</th><th>预设域名</th><th>Worker</th><th>流量</th><th>占比</th><th class="text-right">操作</th></tr>
                       </thead>
                       <tbody id="account_body"></tbody>
                   </table>
@@ -613,105 +753,161 @@ const TEMPLATES = {
         </div>
   
         <div id="section_projects" class="lg:col-span-5 space-y-4">
-          
-          <div class="bg-white rounded shadow border-t-4 border-red-500 project-card">
-              <div class="bg-red-50 px-4 py-2 flex justify-between items-center border-b border-red-100">
-                  <div class="flex items-center gap-2">
-                      <span class="text-sm font-bold text-red-700">🔴 CMliu 配置</span>
-                      <span id="badge_cmliu" class="text-[9px] px-1.5 py-0.5 rounded text-white bg-gray-400">Loading</span>
-                  </div>
-                  <button onclick="openVersionHistory('cmliu')" class="text-[10px] bg-white border border-red-200 text-red-600 px-2 py-0.5 rounded hover:bg-red-50">📜 历史/收藏</button>
-              </div>
-              <div class="p-3">
-                  <div id="ver_cmliu" class="text-[10px] font-mono text-gray-400 mb-2 border-b border-gray-100 pb-2">Checking...</div>
-                  <details class="group bg-slate-50 rounded border mb-2">
-                      <summary class="bg-slate-100 px-2 py-1 text-xs font-bold text-gray-600 flex justify-between"><span>📝 变量列表</span><span>▼</span></summary>
-                      <div id="vars_cmliu" class="p-2 space-y-1 max-h-[200px] overflow-y-auto"></div>
-                  </details>
-                  <div class="flex gap-2 mb-2">
-                      <button onclick="addVarRow('cmliu')" class="flex-1 bg-dashed border text-gray-400 text-xs py-1 rounded hover:text-gray-600">➕ 变量</button>
-                      <button onclick="selectSyncAccount('cmliu')" class="flex-none bg-orange-50 text-orange-600 border border-orange-200 text-xs px-2 py-1 rounded">🔄 同步</button>
-                  </div>
-                  <div class="flex gap-2">
-                      <button onclick="refreshUUID('cmliu')" class="flex-1 bg-gray-100 text-gray-600 text-xs py-1.5 rounded">🎲 刷 UUID</button>
-                      <button onclick="deploy('cmliu')" id="btn_deploy_cmliu" class="flex-[2] bg-red-600 text-white text-xs py-1.5 rounded font-bold hover:bg-red-700">🚀 部署</button>
-                  </div>
-              </div>
-          </div>
+            <div class="bg-white rounded shadow border-t-4 border-red-500 project-card">
+                <div class="bg-red-50 px-4 py-2 flex justify-between items-center border-b border-red-100">
+                    <div class="flex items-center gap-2"><span class="text-sm font-bold text-red-700">🔴 CMliu 配置</span><span id="badge_cmliu" class="text-[9px] px-1.5 py-0.5 rounded text-white bg-gray-400">Loading</span></div>
+                    <button onclick="openVersionHistory('cmliu')" class="text-[10px] bg-white border border-red-200 text-red-600 px-2 py-0.5 rounded hover:bg-red-50">📜 历史/收藏</button>
+                </div>
+                <div class="p-3">
+                    <div id="ver_cmliu" class="text-[10px] font-mono text-gray-400 mb-2 border-b border-gray-100 pb-2">Checking...</div>
+                    <details class="group bg-slate-50 rounded border mb-2">
+                        <summary class="bg-slate-100 px-2 py-1 text-xs font-bold text-gray-600 flex justify-between"><span>📝 变量列表</span><span>▼</span></summary>
+                        <div id="vars_cmliu" class="p-2 space-y-1 max-h-[200px] overflow-y-auto"></div>
+                    </details>
+                    <div class="flex gap-2 mb-2">
+                        <button onclick="addVarRow('cmliu')" class="flex-1 bg-dashed border text-gray-400 text-xs py-1 rounded hover:text-gray-600">➕ 变量</button>
+                        <button onclick="selectSyncAccount('cmliu')" class="flex-none bg-orange-50 text-orange-600 border border-orange-200 text-xs px-2 py-1 rounded">🔄 同步</button>
+                    </div>
+                    <div class="flex gap-2">
+                        <button onclick="refreshUUID('cmliu')" class="flex-1 bg-gray-100 text-gray-600 text-xs py-1.5 rounded">🎲 刷 UUID</button>
+                        <button onclick="deploy('cmliu')" id="btn_deploy_cmliu" class="flex-[2] bg-red-600 text-white text-xs py-1.5 rounded font-bold hover:bg-red-700">🚀 部署更新</button>
+                    </div>
+                </div>
+            </div>
 
-          <div class="bg-white rounded shadow border-t-4 border-blue-500 project-card">
-              <div class="bg-blue-50 px-4 py-2 flex justify-between items-center border-b border-blue-100">
-                  <div class="flex items-center gap-2">
-                      <span class="text-sm font-bold text-blue-700">🔵 Joey 配置</span>
-                      <span id="badge_joey" class="text-[9px] px-1.5 py-0.5 rounded text-white bg-gray-400">Loading</span>
-                  </div>
-                  <button onclick="openVersionHistory('joey')" class="text-[10px] bg-white border border-blue-200 text-blue-600 px-2 py-0.5 rounded hover:bg-blue-50">📜 历史/收藏</button>
-              </div>
-              <div class="p-3">
-                  <div id="ver_joey" class="text-[10px] font-mono text-gray-400 mb-2 border-b border-gray-100 pb-2">Checking...</div>
-                  <details class="group bg-slate-50 rounded border mb-2">
-                      <summary class="bg-slate-100 px-2 py-1 text-xs font-bold text-gray-600 flex justify-between"><span>📝 变量列表</span><span>▼</span></summary>
-                      <div id="vars_joey" class="p-2 space-y-1 max-h-[200px] overflow-y-auto"></div>
-                  </details>
-                  <div class="flex gap-2 mb-2">
-                      <button onclick="addVarRow('joey')" class="flex-1 bg-dashed border text-gray-400 text-xs py-1 rounded hover:text-gray-600">➕ 变量</button>
-                      <button onclick="selectSyncAccount('joey')" class="flex-none bg-orange-50 text-orange-600 border border-orange-200 text-xs px-2 py-1 rounded">🔄 同步</button>
-                  </div>
-                  <div class="flex gap-2">
-                      <button onclick="refreshUUID('joey')" class="flex-1 bg-gray-100 text-gray-600 text-xs py-1.5 rounded">🎲 刷 UUID</button>
-                      <button onclick="deploy('joey')" id="btn_deploy_joey" class="flex-[2] bg-blue-600 text-white text-xs py-1.5 rounded font-bold hover:bg-blue-700">🚀 部署</button>
-                  </div>
-              </div>
-          </div>
-          
-          <div class="bg-white rounded shadow border-t-4 border-green-500 project-card">
-              <div class="bg-green-50 px-4 py-2 flex justify-between items-center border-b border-green-100">
-                  <span class="text-sm font-bold text-green-700">🟢 ECH 配置</span>
-                  <span class="text-[9px] px-1.5 py-0.5 rounded text-white bg-green-500">Stable</span>
-              </div>
-              <div class="p-3">
-                  <div class="mb-2 p-2 bg-slate-50 border rounded text-xs">
-                      <div id="ech_proxy_selector_container" class="mb-2"></div>
-                      <div id="vars_ech" class="space-y-1"></div>
-                  </div>
-                  <div class="flex gap-2">
-                      <button onclick="selectSyncAccount('ech')" class="flex-1 bg-orange-50 text-orange-600 border border-orange-200 text-xs px-2 py-1 rounded hover:bg-orange-100">🔄 同步</button>
-                      <button onclick="deploy('ech')" id="btn_deploy_ech" class="flex-[2] bg-green-600 text-white text-xs py-1.5 rounded hover:bg-green-700 font-bold">🚀 部署 ECH</button>
-                  </div>
-              </div>
-          </div>
+            <div class="bg-white rounded shadow border-t-4 border-blue-500 project-card">
+                <div class="bg-blue-50 px-4 py-2 flex justify-between items-center border-b border-blue-100">
+                    <div class="flex items-center gap-2"><span class="text-sm font-bold text-blue-700">🔵 Joey 配置</span><span id="badge_joey" class="text-[9px] px-1.5 py-0.5 rounded text-white bg-gray-400">Loading</span></div>
+                    <button onclick="openVersionHistory('joey')" class="text-[10px] bg-white border border-blue-200 text-blue-600 px-2 py-0.5 rounded hover:bg-blue-50">📜 历史/收藏</button>
+                </div>
+                <div class="p-3">
+                    <div id="ver_joey" class="text-[10px] font-mono text-gray-400 mb-2 border-b border-gray-100 pb-2">Checking...</div>
+                    <details class="group bg-slate-50 rounded border mb-2">
+                        <summary class="bg-slate-100 px-2 py-1 text-xs font-bold text-gray-600 flex justify-between"><span>📝 变量列表</span><span>▼</span></summary>
+                        <div id="vars_joey" class="p-2 space-y-1 max-h-[200px] overflow-y-auto"></div>
+                    </details>
+                    <div class="flex gap-2 mb-2">
+                        <button onclick="addVarRow('joey')" class="flex-1 bg-dashed border text-gray-400 text-xs py-1 rounded hover:text-gray-600">➕ 变量</button>
+                        <button onclick="selectSyncAccount('joey')" class="flex-none bg-orange-50 text-orange-600 border border-orange-200 text-xs px-2 py-1 rounded">🔄 同步</button>
+                    </div>
+                    <div class="flex gap-2">
+                        <button onclick="refreshUUID('joey')" class="flex-1 bg-gray-100 text-gray-600 text-xs py-1.5 rounded">🎲 刷 UUID</button>
+                        <button onclick="deploy('joey')" id="btn_deploy_joey" class="flex-[2] bg-blue-600 text-white text-xs py-1.5 rounded font-bold hover:bg-blue-700">🚀 部署更新</button>
+                    </div>
+                </div>
+            </div>
 
+            <div class="bg-white rounded shadow border-t-4 border-green-500 project-card">
+                <div class="bg-green-50 px-4 py-2 flex justify-between items-center border-b border-green-100"><span class="text-sm font-bold text-green-700">🟢 ECH 配置</span><span class="text-[9px] px-1.5 py-0.5 rounded text-white bg-green-500">Stable</span></div>
+                <div class="p-3">
+                    <div class="mb-2 p-2 bg-slate-50 border rounded text-xs"><div id="ech_proxy_selector_container" class="mb-2"></div><div id="vars_ech" class="space-y-1"></div></div>
+                    <div class="flex gap-2">
+                        <button onclick="selectSyncAccount('ech')" class="flex-1 bg-orange-50 text-orange-600 border border-orange-200 text-xs px-2 py-1 rounded hover:bg-orange-100">🔄 同步</button>
+                        <button onclick="deploy('ech')" id="btn_deploy_ech" class="flex-[2] bg-green-600 text-white text-xs py-1.5 rounded hover:bg-green-700 font-bold">🚀 部署 ECH</button>
+                    </div>
+                </div>
+            </div>
         </div>
       </div>
     </div>
-  
+
+    <div id="batch_deploy_modal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50">
+        <div class="bg-white rounded-lg w-[500px] shadow-2xl overflow-hidden animate-fade-in">
+            <div class="bg-indigo-600 p-3 flex justify-between items-center text-white">
+                <h3 class="font-bold text-sm">✨ 批量新建部署</h3>
+                <button onclick="document.getElementById('batch_deploy_modal').classList.add('hidden')" class="hover:text-gray-200">×</button>
+            </div>
+            <div class="p-4 text-xs space-y-3">
+                <div class="grid grid-cols-2 gap-3">
+                    <div><label class="block text-gray-500 mb-1">Worker 名称</label><input id="bd_name" class="input-field font-bold text-indigo-700" placeholder="例如: new-proxy-01"></div>
+                    <div><label class="block text-gray-500 mb-1">选择模板</label><select id="bd_template" onchange="toggleBatchInputs()" class="input-field bg-gray-50"><option value="cmliu">🔴 CMliu (EdgeTunnel)</option><option value="joey">🔵 Joey (相信光)</option></select></div>
+                </div>
+                <div><label class="block text-gray-500 mb-1">KV 空间名称</label><input id="bd_kv_name" class="input-field" placeholder="自动创建/使用同名 KV"></div>
+                
+                <div class="bg-slate-50 p-2 rounded border">
+                    <div class="flex items-center gap-2 mb-2">
+                         <input type="checkbox" id="bd_disable_workers_dev" class="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500">
+                         <label for="bd_disable_workers_dev" class="font-bold text-gray-700">🚫 禁用默认 *.workers.dev 域名</label>
+                    </div>
+
+                    <div class="border-t pt-2">
+                        <label class="block text-purple-700 font-bold mb-1">🌐 自定义域名 (自动绑定)</label>
+                        <div class="flex gap-1 items-center">
+                            <input id="bd_domain_prefix" class="input-field w-1/3" placeholder="仅输入前缀">
+                            <span class="text-gray-400">.</span>
+                            <span class="text-gray-500 text-xs italic">[使用账号预设域名]</span>
+                        </div>
+                        <p class="text-[9px] text-gray-400 mt-1">* 仅当账号已配置"预设域名"时生效。</p>
+                    </div>
+                </div>
+
+                <div id="bd_config_cmliu" class="bg-red-50 p-2 rounded border border-red-100">
+                    <label class="block text-red-700 font-bold mb-1">设置 ADMIN 密码</label>
+                    <input id="bd_admin_pass" class="input-field bg-white" placeholder="登录后台的密码">
+                </div>
+                <div id="bd_config_joey" class="hidden bg-blue-50 p-2 rounded border border-blue-100">
+                    <label class="block text-blue-700 font-bold mb-1">设置用户 UUID (u)</label>
+                    <div class="flex gap-2">
+                        <input id="bd_uuid" class="input-field bg-white font-mono" placeholder="UUID">
+                        <button onclick="document.getElementById('bd_uuid').value = crypto.randomUUID()" class="bg-blue-600 text-white px-2 rounded">🎲</button>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-gray-500 mb-1">选择目标账号</label>
+                    <div id="bd_account_list" class="max-h-[100px] overflow-y-auto border rounded p-2 bg-gray-50 grid grid-cols-2 gap-2"></div>
+                </div>
+                <div class="pt-2 border-t flex justify-end gap-2">
+                    <button onclick="document.getElementById('batch_deploy_modal').classList.add('hidden')" class="px-3 py-1.5 bg-gray-100 text-gray-600 rounded">取消</button>
+                    <button onclick="doBatchDeploy()" id="btn_do_batch" class="px-3 py-1.5 bg-indigo-600 text-white rounded font-bold hover:bg-indigo-700">🚀 开始部署</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="account_manage_modal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50">
+        <div class="bg-white rounded-lg w-[600px] shadow-2xl max-h-[85vh] flex flex-col">
+            <div class="bg-slate-700 p-3 flex justify-between items-center text-white">
+                <h3 class="font-bold text-sm" id="manage_modal_title">📂 账号管理</h3>
+                <button onclick="document.getElementById('account_manage_modal').classList.add('hidden')" class="hover:text-gray-200">×</button>
+            </div>
+            <div class="p-2 border-b bg-gray-50 text-[10px] text-gray-500">
+                ⚠️ 警告：在此处删除 Worker 将不可恢复。请确认是否需要同时删除绑定的 KV。
+            </div>
+            <div class="flex-1 overflow-y-auto p-4">
+                <div id="manage_loading" class="text-center py-4 text-gray-400">正在加载 Workers 列表...</div>
+                <table class="w-full compact-table hidden" id="manage_table">
+                    <thead><tr><th>Worker 名称</th><th>创建时间</th><th>修改时间</th><th class="text-right">操作</th></tr></thead>
+                    <tbody id="manage_list_body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
     <div id="history_modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
         <div class="bg-white rounded-lg w-[450px] shadow-xl max-h-[85vh] flex flex-col overflow-hidden">
             <div class="p-3 border-b bg-gray-50 flex justify-between items-center">
                 <h3 class="text-sm font-bold text-gray-700">📜 版本管理</h3>
                 <button onclick="document.getElementById('history_modal').classList.add('hidden')" class="text-gray-400 hover:text-gray-600 text-lg">×</button>
             </div>
+            <div class="bg-gray-50 p-2 border-b flex justify-between items-center text-xs">
+                <span>显示条数:</span>
+                <input type="number" id="history_limit_input" value="10" class="w-12 text-center border rounded" onchange="refreshHistory()">
+            </div>
             <div class="flex-1 overflow-y-auto bg-slate-50 p-2 space-y-3">
-                
                 <div id="fav_section" class="hidden">
                     <div class="text-[10px] font-bold text-orange-600 uppercase tracking-wider mb-1 px-1">⭐ 收藏夹 (Favorites)</div>
                     <div id="fav_list" class="space-y-1"></div>
                 </div>
-
                 <div>
                     <div class="flex justify-between items-end px-1 mb-1">
-                        <div class="text-[10px] font-bold text-gray-500 uppercase tracking-wider">🕒 最近提交 (History)</div>
-                        <div class="text-[9px] text-gray-400" id="history_count_display"></div>
+                        <div class="text-[10px] font-bold text-gray-500 uppercase tracking-wider">🕒 最近提交</div>
                     </div>
                     <div id="history_list" class="space-y-1 min-h-[100px]"></div>
                 </div>
             </div>
-            <div class="p-2 border-t bg-white text-[10px] text-gray-500 text-center">
-                <p>点击列表项即可回滚/锁定到该版本 (将自动停止自动更新)</p>
-            </div>
         </div>
     </div>
-    
+
     <div id="sync_select_modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
         <div class="bg-white rounded-lg p-4 w-80 shadow-xl max-h-[80vh] flex flex-col">
             <h3 class="text-sm font-bold mb-3 text-gray-700">📥 选择同步源</h3>
@@ -719,497 +915,324 @@ const TEMPLATES = {
             <button onclick="document.getElementById('sync_select_modal').classList.add('hidden')" class="w-full bg-gray-200 text-gray-600 text-xs py-1.5 rounded">取消</button>
         </div>
     </div>
-  
+
     <script>
-      // ================= 配置常量 =================
       const TEMPLATES = { 
         'cmliu': { defaultVars: ["UUID", "PROXYIP", "DOH", "PATH", "URL", "KEY", "ADMIN"], uuidField: "UUID", name: "CMliu" }, 
         'joey': { defaultVars: ["u", "d", "p"], uuidField: "u", name: "Joey" }, 
         'ech': { defaultVars: ["PROXYIP"], uuidField: "", name: "ECH" } 
       };
       
-      const DOH_PRESETS = [
-          "https://dns.jhb.ovh/joeyblog",
-          "https://doh.cmliussss.com/CMLiussss",
-          "cloudflare-ech.com"
-      ];
-      
-      // [修复] 完整的 ECH ProxyIP 列表
+      // [全量 ProxyIP] 完整列表
       const ECH_PROXIES = [
-          {group:"全球 Global", list:["ProxyIP.CMLiussss.net"]},
-          {group:"亚洲 Asia", list:[
-              "ProxyIP.HK.CMLiussss.net (香港)", "ProxyIP.SG.CMLiussss.net (新加坡)", 
-              "ProxyIP.JP.CMLiussss.net (日本)", "ProxyIP.KR.CMLiussss.net (韩国)", "ProxyIP.IN.CMLiussss.net (印度)"
-          ]},
-          {group:"欧洲 Europe", list:[
-              "ProxyIP.GB.CMLiussss.net (英国)", "ProxyIP.FR.CMLiussss.net (法国)", "ProxyIP.DE.CMLiussss.net (德国)", 
-              "ProxyIP.NL.CMLiussss.net (荷兰)", "ProxyIP.SE.CMLiussss.net (瑞典)", "ProxyIP.FI.CMLiussss.net (芬兰)",
-              "ProxyIP.PL.CMLiussss.net (波兰)", "ProxyIP.RU.CMLiussss.net (俄罗斯)", "ProxyIP.CH.CMLiussss.net (瑞士)",
-              "ProxyIP.LV.CMLiussss.net (拉脱维亚)"
-          ]},
-          {group:"北美 North America", list:[
-              "ProxyIP.US.CMLiussss.net (美国)", "ProxyIP.CA.CMLiussss.net (加拿大)"
-          ]}
+          {group:"Global", list:["ProxyIP.CMLiussss.net", "ProxyIP.Aliyun.CMLiussss.net", "ProxyIP.Oracle.CMLiussss.net"]},
+          {group:"HK (香港)", list:["ProxyIP.HK.CMLiussss.net", "ProxyIP.Aliyun.HK.CMLiussss.net", "ProxyIP.Oracle.HK.CMLiussss.net"]},
+          {group:"JP (日本)", list:["ProxyIP.JP.CMLiussss.net", "ProxyIP.Aliyun.JP.CMLiussss.net", "ProxyIP.Oracle.JP.CMLiussss.net"]},
+          {group:"SG (新加坡)", list:["ProxyIP.SG.CMLiussss.net", "ProxyIP.Aliyun.SG.CMLiussss.net", "ProxyIP.Oracle.SG.CMLiussss.net"]},
+          {group:"KR (韩国)", list:["ProxyIP.KR.CMLiussss.net", "ProxyIP.Oracle.KR.CMLiussss.net"]},
+          {group:"US (美国)", list:["ProxyIP.US.CMLiussss.net", "ProxyIP.Aliyun.US.CMLiussss.net", "ProxyIP.Oracle.US.CMLiussss.net"]},
+          {group:"Europe", list:["ProxyIP.DE.CMLiussss.net (德国)", "ProxyIP.UK.CMLiussss.net (英国)", "ProxyIP.FR.CMLiussss.net (法国)", "ProxyIP.NL.CMLiussss.net (荷兰)", "ProxyIP.RU.CMLiussss.net (俄罗斯)"]},
+          {group:"Others", list:["ProxyIP.TW.CMLiussss.net (台湾)", "ProxyIP.AU.CMLiussss.net (澳洲)", "ProxyIP.IN.CMLiussss.net (印度)"]}
       ];
   
-      // ================= 全局变量 =================
       let accounts = [];
       let editingIndex = -1;
       let deletedVars = { cmliu: [], joey: [], ech: [] };
-      let currentLayout = 'standard';
-      let deployConfigs = {}; // 存储每个项目的部署状态 (mode, sha)
+      let deployConfigs = {}; 
+      let currentHistoryType = null;
   
-      // ================= 初始化 =================
       async function init() {
-          const savedLayout = localStorage.getItem('cw_layout'); 
-          if(savedLayout){ currentLayout = savedLayout; applyLayout(); }
-          
           renderProxySelector();
           await loadAccounts();
           await Promise.all(['cmliu','joey','ech'].map(t => loadVars(t)));
           await loadGlobalConfig();
           loadStats();
-          
-          // 加载项目锁定状态
-          checkDeployConfig('cmliu'); 
-          checkDeployConfig('joey');
-          
-          // 检查版本更新
-          checkUpdate('cmliu'); 
-          checkUpdate('joey'); 
-          checkUpdate('ech');
+          ['cmliu','joey'].forEach(t => { checkDeployConfig(t); checkUpdate(t); });
       }
 
-      // ================= 核心新功能：历史与收藏 =================
+      // ================= 域名预设逻辑 =================
+      async function fetchZonesForAccount() {
+          const email = document.getElementById('in_email').value;
+          const key = document.getElementById('in_gkey').value;
+          const id = document.getElementById('in_id').value;
+          const select = document.getElementById('in_zone_select');
 
-      // 打开版本历史弹窗
-      async function openVersionHistory(type) {
-          const modal = document.getElementById('history_modal');
-          const hList = document.getElementById('history_list');
-          const fList = document.getElementById('fav_list');
-          const fSec = document.getElementById('fav_section');
-          
-          // 获取用户设置的历史数量
-          const limit = document.getElementById('history_limit').value || 10;
-          
-          modal.classList.remove('hidden');
-          hList.innerHTML = '<div class="text-center text-gray-400 text-xs py-4">加载中...</div>';
-          fList.innerHTML = ''; 
-          fSec.classList.add('hidden');
-          document.getElementById('history_count_display').innerText = \`Fetch Limit: \${limit}\`;
+          if (!email || !key) return Swal.fire('提示', '请先填写 Email, API Key', 'warning');
 
+          select.innerHTML = '<option>Loading...</option>';
           try {
-              // 并行获取：历史提交 + 收藏夹
-              const [histRes, favRes] = await Promise.all([
-                  fetch(\`/api/check_update?type=\${type}&mode=history&limit=\${limit}\`),
-                  fetch(\`/api/favorites?type=\${type}\`)
-              ]);
-              const histData = await histRes.json();
-              const favData = await favRes.json();
-
-              // 1. 渲染收藏夹
-              if (favData && favData.length > 0) {
-                  fSec.classList.remove('hidden');
-                  favData.forEach(item => renderHistoryItem(type, item, fList, true));
+              const res = await fetch('/api/zones', {
+                  method: 'POST',
+                  body: JSON.stringify({ accountId: id, email: email, globalKey: key })
+              });
+              const d = await res.json();
+              if (d.success) {
+                  select.innerHTML = '<option value="">-- 请选择预设域名 --</option>' + 
+                      d.zones.map(z => \`<option value="\${z.id}" data-name="\${z.name}">\${z.name}</option>\`).join('');
+              } else {
+                  select.innerHTML = '<option>读取失败</option>';
+                  Swal.fire('错误', d.msg, 'error');
               }
+          } catch(e) { select.innerHTML = '<option>网络错误</option>'; }
+      }
 
-              // 2. 渲染历史列表
-              hList.innerHTML = '';
-              
-              // 添加 "Always Latest" 选项
-              const latestBtn = document.createElement('div');
-              latestBtn.className = "bg-green-50 hover:bg-green-100 p-2 rounded border border-green-200 cursor-pointer transition mb-2";
-              latestBtn.innerHTML = \`<div class="flex justify-between items-center"><span class="font-bold text-green-700 text-xs">⚡ Always Latest (恢复自动更新)</span></div><div class="text-[9px] text-green-600 mt-1">每次部署拉取最新代码。</div>\`;
-              latestBtn.onclick = () => { modal.classList.add('hidden'); deploy(type, 'latest'); };
-              hList.appendChild(latestBtn);
-
-              if (histData.history) {
-                  histData.history.forEach(commit => {
-                      const item = { 
-                          sha: commit.sha, 
-                          date: commit.commit.committer.date, 
-                          message: commit.commit.message 
-                      };
-                      // 检查该版本是否已在收藏夹中
-                      const isFav = favData && favData.find(f => f.sha === item.sha);
-                      renderHistoryItem(type, item, hList, false, isFav);
-                  });
-              } else { 
-                  hList.innerHTML = '<div class="text-red-400 text-xs">获取失败</div>'; 
-              }
-
-          } catch(e) { 
-              hList.innerHTML = '<div class="text-red-400 text-xs">网络错误</div>'; 
+      function updateZoneInfo() {
+          const sel = document.getElementById('in_zone_select');
+          if(sel.selectedIndex > 0) {
+              document.getElementById('in_zone_id').value = sel.value;
+              document.getElementById('in_zone_name').value = sel.options[sel.selectedIndex].dataset.name;
           }
       }
 
-      // 渲染单条历史记录 (支持收藏按钮)
-      function renderHistoryItem(type, item, container, isFavSection, isFavInHist = false) {
-          const shortSha = item.sha.substring(0, 7);
-          const date = new Date(item.date).toLocaleString();
-          const isCurrent = deployConfigs[type] && deployConfigs[type].currentSha === item.sha;
-          
-          const el = document.createElement('div');
-          el.className = \`group relative p-2 rounded border transition mb-1 flex gap-2 \${isCurrent ? 'bg-orange-50 border-orange-300' : 'bg-white border-gray-100 hover:border-blue-200'}\`;
-          
-          // 收藏按钮
-          const starBtn = document.createElement('button');
-          starBtn.className = \`text-sm focus:outline-none \${(isFavSection || isFavInHist) ? 'text-orange-400 hover:text-orange-600' : 'text-gray-300 hover:text-orange-400'}\`;
-          starBtn.innerHTML = (isFavSection || isFavInHist) ? '★' : '☆';
-          starBtn.title = isFavSection ? "取消收藏" : "加入收藏";
-          starBtn.onclick = (e) => {
-              e.stopPropagation();
-              toggleFavorite(type, item, isFavSection || isFavInHist);
-          };
-
-          // 内容区域
-          const content = document.createElement('div');
-          content.className = "flex-1 cursor-pointer overflow-hidden";
-          content.innerHTML = \`
-              <div class="flex justify-between items-center mb-0.5">
-                  <span class="font-mono text-[10px] bg-slate-100 px-1 rounded text-slate-600">\${shortSha}</span>
-                  <span class="text-[9px] text-gray-400">\${date}</span>
-              </div>
-              <div class="text-[10px] text-gray-700 truncate" title="\${item.message}">\${item.message}</div>
-              \${isCurrent ? '<div class="text-[9px] text-orange-600 font-bold mt-0.5">◀ 当前版本</div>' : ''}
-          \`;
-          content.onclick = () => {
-              if(confirm(\`确认回滚/锁定到版本 [\${shortSha}]？\\n(这将暂停该项目的自动代码更新)\`)) {
-                  document.getElementById('history_modal').classList.add('hidden');
-                  deploy(type, item.sha);
-              }
-          };
-
-          el.appendChild(starBtn);
-          el.appendChild(content);
-          container.appendChild(el);
+      // ================= 批量部署 =================
+      function openBatchDeployModal() {
+          const m = document.getElementById('batch_deploy_modal');
+          const list = document.getElementById('bd_account_list');
+          list.innerHTML = '';
+          accounts.forEach(a => {
+              const div = document.createElement('div');
+              div.className = "flex items-center gap-1";
+              div.innerHTML = \`<input type="checkbox" value="\${a.alias}" class="bd-acc-chk" id="chk_\${a.alias}"><label for="chk_\${a.alias}">\${a.alias}</label>\`;
+              list.appendChild(div);
+          });
+          document.getElementById('bd_uuid').value = crypto.randomUUID();
+          m.classList.remove('hidden');
       }
 
-      // 切换收藏状态
-      async function toggleFavorite(type, item, isRemove) {
+      function toggleBatchInputs() {
+          const t = document.getElementById('bd_template').value;
+          document.getElementById('bd_config_cmliu').classList.toggle('hidden', t !== 'cmliu');
+          document.getElementById('bd_config_joey').classList.toggle('hidden', t !== 'joey');
+      }
+
+      async function doBatchDeploy() {
+          const btn = document.getElementById('btn_do_batch');
+          const t = document.getElementById('bd_template').value;
+          const name = document.getElementById('bd_name').value;
+          const kvName = document.getElementById('bd_kv_name').value;
+          
+          if (!name || !kvName) return Swal.fire('提示', 'Worker名称和 KV名称必填', 'warning');
+          const chks = document.querySelectorAll('.bd-acc-chk:checked');
+          if (chks.length === 0) return Swal.fire('提示', '请至少选择一个账号', 'warning');
+          
+          const targetAccounts = Array.from(chks).map(c => c.value);
+          const config = {};
+          if (t === 'cmliu') {
+              config.admin = document.getElementById('bd_admin_pass').value;
+              if (!config.admin) return Swal.fire('提示', 'CMliu 必须设置 ADMIN 密码', 'warning');
+              config.uuid = document.getElementById('bd_uuid').value;
+          } else {
+              config.uuid = document.getElementById('bd_uuid').value;
+              if (!config.uuid) return Swal.fire('提示', 'Joey 必须设置 UUID', 'warning');
+          }
+
+          const disableWorkersDev = document.getElementById('bd_disable_workers_dev').checked;
+          const customDomainPrefix = document.getElementById('bd_domain_prefix').value;
+
+          btn.disabled = true;
+          btn.innerText = "⏳ 部署中...";
+          const logBox = document.getElementById('logs');
+          logBox.classList.remove('hidden');
+          logBox.innerHTML = '<div class="text-indigo-300">⚡ Initializing Batch Deploy...</div>';
+
           try {
-              await fetch('/api/favorites', {
+              const res = await fetch('/api/batch_deploy', {
                   method: 'POST',
                   body: JSON.stringify({ 
-                      action: isRemove ? 'remove' : 'add', 
-                      item: item, 
-                      type: type 
+                      template: t, 
+                      workerName: name, 
+                      kvName: kvName, 
+                      config: config, 
+                      targetAccounts: targetAccounts,
+                      disableWorkersDev: disableWorkersDev,
+                      customDomainPrefix: customDomainPrefix
                   })
               });
-              // 刷新列表以显示最新状态
-              openVersionHistory(type); 
-          } catch(e) { 
-              alert('操作失败'); 
-          }
+              const logs = await res.json();
+              logBox.innerHTML = logs.map(l => {
+                  if (l.success && l.msg.startsWith('✅')) {
+                      return \`<div>✅ <span class="text-white">\${l.msg.replace('✅ ', '')}</span></div>\`;
+                  }
+                  return \`<div>[\${l.success ? 'OK' : 'ERR'}] \${l.name}: <span class="text-gray-400">\${l.msg}</span></div>\`;
+              }).join('');
+              
+              document.getElementById('batch_deploy_modal').classList.add('hidden');
+              await loadAccounts(); 
+              Swal.fire('完成', '批量操作完成，请查看顶部日志', 'success');
+          } catch(e) { Swal.fire('错误', '请求失败: ' + e.message, 'error'); }
+          btn.disabled = false;
+          btn.innerText = "🚀 开始部署";
       }
 
-      // ================= 核心部署与配置逻辑 =================
+      // ================= 账号管理 & 删除 =================
+      async function openAccountManage(i) {
+          const acc = accounts[i];
+          if (!acc.globalKey) return Swal.fire('无法管理', '请先配置 Global API Key', 'error');
 
-      // 获取部署状态 (检查是否锁定)
-      async function checkDeployConfig(t) { 
+          const modal = document.getElementById('account_manage_modal');
+          const table = document.getElementById('manage_table');
+          const tbody = document.getElementById('manage_list_body');
+          const loading = document.getElementById('manage_loading');
+          
+          document.getElementById('manage_modal_title').innerText = \`📂 管理账号: \${acc.alias}\`;
+          modal.classList.remove('hidden');
+          table.classList.add('hidden');
+          loading.classList.remove('hidden');
+          tbody.innerHTML = '';
+
           try {
-              const r = await fetch(\`/api/deploy_config?type=\${t}\`);
-              const c = await r.json();
-              deployConfigs[t] = c;
+              const res = await fetch('/api/all_workers', {
+                  method: 'POST',
+                  body: JSON.stringify({ accountId: acc.accountId, email: acc.email, globalKey: acc.globalKey })
+              });
+              const d = await res.json();
+              loading.classList.add('hidden');
               
-              const badge = document.getElementById(\`badge_\${t}\`);
-              if (c.mode === 'fixed') {
-                  badge.className = "text-[9px] px-1.5 py-0.5 rounded text-white bg-orange-500 font-bold";
-                  badge.innerText = "🔒 Locked";
+              if (d.success) {
+                  table.classList.remove('hidden');
+                  if (d.workers.length === 0) {
+                      tbody.innerHTML = '<tr><td colspan="4" class="text-center py-4">无 Worker</td></tr>';
+                  } else {
+                      tbody.innerHTML = d.workers.map(w => \`
+                          <tr class="hover:bg-gray-50 border-b">
+                              <td class="font-bold text-indigo-600">\${w.id}</td>
+                              <td>\${new Date(w.created_on).toLocaleDateString()}</td>
+                              <td>\${new Date(w.modified_on).toLocaleDateString()}</td>
+                              <td class="text-right">
+                                  <button onclick="confirmDeleteWorker('\${acc.alias}', '\${w.id}', \${i})" class="text-xs bg-red-100 text-red-600 px-2 py-1 rounded hover:bg-red-200">🗑️ 删除</button>
+                              </td>
+                          </tr>
+                      \`).join('');
+                  }
               } else {
-                  badge.className = "text-[9px] px-1.5 py-0.5 rounded text-white bg-green-500";
-                  badge.innerText = "Auto Update";
+                  tbody.innerHTML = \`<tr><td colspan="4" class="text-center text-red-500 py-4">\${d.msg}</td></tr>\`;
+                  table.classList.remove('hidden');
               }
-          } catch(e) {} 
-      }
-      
-      // 部署函数
-      async function deploy(t, sha = '') {
-         const btn = document.getElementById(\`btn_deploy_\${t}\`);
-         const ot = btn.innerText;
-         btn.innerText = "⏳ 部署中...";
-         btn.disabled = true;
-         
-         // 收集当前变量
-         const vars = [];
-         document.querySelectorAll(\`.var-row-\${t}\`).forEach(r => {
-             const k = r.querySelector('.key').value;
-             const v = r.querySelector('.val').value;
-             if(k) vars.push({key: k, value: v});
-         });
-         
-         // 先保存变量
-         await fetch(\`/api/settings?type=\${t}\`, {method: 'POST', body: JSON.stringify(vars)});
-         
-         const logBox = document.getElementById('logs');
-         logBox.classList.remove('hidden');
-         const modeText = sha ? (sha === 'latest' ? 'Latest' : 'Locked') : 'Default';
-         logBox.innerHTML = \`<div class="text-yellow-400">⚡ Deploying \${t} (\${modeText})...</div>\`;
-         
-         try {
-             const res = await fetch(\`/api/deploy?type=\${t}\`, {
-                 method: 'POST',
-                 body: JSON.stringify({
-                     variables: vars,
-                     deletedVariables: deletedVars[t],
-                     targetSha: sha
-                 })
-             });
-             const logs = await res.json();
-             
-             logBox.innerHTML += logs.map(l => 
-                 \`<div>[\${l.success ? 'OK' : 'ERR'}] \${l.name}: <span class="text-gray-400">\${l.msg}</span></div>\`
-             ).join('');
-             
-             deletedVars[t] = [];
-             
-             // 延时刷新状态
-             setTimeout(() => {
-                 checkUpdate(t);
-                 checkDeployConfig(t);
-             }, 1000);
-         } catch(e) { 
-             logBox.innerHTML += \`<div class="text-red-500">Error: \${e.message}</div>\`; 
-         }
-         
-         btn.innerText = ot;
-         btn.disabled = false;
+          } catch(e) { loading.innerText = "网络错误"; }
       }
 
-      // ================= UI 渲染逻辑 =================
-
-      // 渲染 Proxy 选择器 (ECH专用)
-      function renderProxySelector() {
-          const c = document.getElementById('ech_proxy_selector_container');
-          let h = '<select id="ech_proxy_select" onchange="applyEchProxy()" class="w-full text-xs border rounded p-1 mb-1"><option value="">-- Select ProxyIP --</option>';
-          ECH_PROXIES.forEach(g => {
-              h += \`<optgroup label="\${g.group}">\`;
-              g.list.forEach(i => {
-                  h += \`<option value="\${i.split(' ')[0]}">\${i}</option>\`;
-              });
-              h += '</optgroup>';
+      async function confirmDeleteWorker(alias, workerId, accIndex) {
+          const result = await Swal.fire({
+              title: '危险操作',
+              html: \`
+                <p>确认要删除 <b>\${workerId}</b> 吗？</p>
+                <div class="mt-4 text-left bg-gray-50 p-2 rounded">
+                    <label class="flex items-center space-x-2">
+                        <input type="checkbox" id="del_kv_chk" checked class="form-checkbox text-red-600">
+                        <span class="text-sm text-gray-700">同时删除绑定的 KV 存储 (防止残留)</span>
+                    </label>
+                </div>
+              \`,
+              icon: 'warning',
+              showCancelButton: true,
+              confirmButtonText: '确认删除',
+              confirmButtonColor: '#d33',
+              showLoaderOnConfirm: true,
+              preConfirm: () => {
+                  const deleteKv = document.getElementById('del_kv_chk').checked;
+                  const acc = accounts[accIndex];
+                  return fetch('/api/delete_worker', {
+                      method: 'POST',
+                      body: JSON.stringify({ 
+                          accountId: acc.accountId, 
+                          email: acc.email, 
+                          globalKey: acc.globalKey, 
+                          workerName: workerId,
+                          deleteKv: deleteKv 
+                      })
+                  }).then(response => response.json()).then(data => {
+                      if (!data.success) throw new Error(data.msg);
+                      return data;
+                  }).catch(error => Swal.showValidationMessage(\`删除失败: \${error}\`));
+              }
           });
-          c.innerHTML = h + '</select>';
-      }
-      
-      function applyEchProxy() {
-          const v = document.getElementById('ech_proxy_select').value;
-          if (v) addVarRow('ech', 'PROXYIP', v);
-      }
 
-      // 添加变量行
-      function addVarRow(t, k = '', v = '') {
-          const c = document.getElementById(\`vars_\${t}\`);
-          const d = document.createElement('div');
-          d.className = \`flex gap-1 items-center mb-1 var-row-\${t}\`;
-          
-          let h = '';
-          // 下拉辅助逻辑
-          if (t === 'cmliu' && (k === 'PROXYIP' || k === 'DOH')) {
-              const options = k === 'DOH' ? DOH_PRESETS : ECH_PROXIES.flatMap(g => g.list);
-              h = \`<select onchange="this.previousElementSibling.value=this.value" class="w-4 border rounded text-[8px] bg-gray-50 cursor-pointer">
-                  <option>▼</option>
-                  \${options.map(u => \`<option value="\${u.split(' ')[0]}">\${u}</option>\`).join('')}
-              </select>\`;
+          if (result.isConfirmed) {
+              Swal.fire('已删除', 'Worker 及相关资源已清理', 'success');
+              openAccountManage(accIndex);
           }
-          
-          d.innerHTML = \`
-              <input class="input-field w-1/3 key font-bold" placeholder="Key" value="\${k}">
-              <input class="input-field w-2/3 val" placeholder="Val" value="\${v}">
-              \${h}
-              <button onclick="removeVarRow(this,'\${t}')" class="text-gray-300 hover:text-red-500 px-1 font-bold">×</button>
-          \`;
-          c.appendChild(d);
-      }
-
-      function removeVarRow(b, t) {
-          const k = b.parentElement.querySelector('.key').value;
-          if (k) deletedVars[t].push(k);
-          b.parentElement.remove();
-      }
-
-      // 加载变量
-      async function loadVars(t) {
-          const c = document.getElementById(\`vars_\${t}\`);
-          c.innerHTML = '<div class="text-center text-gray-300">...</div>';
-          try {
-              const r = await fetch(\`/api/settings?type=\${t}\`);
-              const v = await r.json();
-              const m = new Map();
-              
-              if (Array.isArray(v)) v.forEach(x => m.set(x.key, x.value));
-              
-              // 补全默认 Key
-              TEMPLATES[t].defaultVars.forEach(k => {
-                  if (!m.has(k)) m.set(k, k === TEMPLATES[t].uuidField ? crypto.randomUUID() : '');
-              });
-              
-              c.innerHTML = '';
-              deletedVars[t] = [];
-              m.forEach((val, key) => addVarRow(t, key, val));
-          } catch(e) {
-              c.innerHTML = 'Load Error';
-          }
-      }
-
-      // 加载全局配置
-      async function loadGlobalConfig() {
-          try {
-              const r = await fetch('/api/auto_config');
-              const c = await r.json();
-              document.getElementById('auto_update_toggle').checked = !!c.enabled;
-              document.getElementById('auto_update_interval').value = c.interval || 30;
-              document.getElementById('fuse_threshold').value = c.fuseThreshold || 0;
-              // 加载历史数量 Limit
-              if (c.historyLimit) document.getElementById('history_limit').value = c.historyLimit;
-          } catch(e) {}
-      }
-
-      // 保存全局配置
-      async function saveAutoConfig() {
-          const limit = document.getElementById('history_limit').value;
-          await fetch('/api/auto_config', {
-              method: 'POST',
-              body: JSON.stringify({
-                  enabled: document.getElementById('auto_update_toggle').checked,
-                  interval: document.getElementById('auto_update_interval').value,
-                  fuseThreshold: document.getElementById('fuse_threshold').value,
-                  historyLimit: limit
-              })
-          });
-          alert('已保存配置');
-      }
-      
-      // ================= 账号管理逻辑 =================
-      
-      async function loadAccounts() {
-          try {
-              const r = await fetch('/api/accounts');
-              accounts = await r.json();
-              // 初始化 stats 对象避免报错
-              accounts.forEach(a => a.stats = a.stats || { total: 0, max: 100000 });
-              renderTable();
-          } catch(e) {}
       }
 
       function renderTable() {
           const tb = document.getElementById('account_body');
-          if (accounts.length === 0) {
-              tb.innerHTML = '<tr><td colspan="5" class="text-center text-gray-300 py-4">无数据</td></tr>';
-              return;
-          }
-          
-          tb.innerHTML = accounts.map((a, i) => {
+          if (accounts.length === 0) { tb.innerHTML = '<tr><td colspan="6" class="text-center text-gray-300 py-4">无数据</td></tr>'; return; }
+          const sortedAccounts = [...accounts].sort((a, b) => b.stats.total - a.stats.total);
+          tb.innerHTML = sortedAccounts.map((a) => {
+              const originalIndex = accounts.findIndex(acc => acc.alias === a.alias);
               const count = (a.workers_cmliu||[]).length + (a.workers_joey||[]).length + (a.workers_ech||[]).length;
               const percent = ((a.stats.total / a.stats.max) * 100).toFixed(1);
-              let barColor = 'bg-green-500';
-              if (percent > 80) barColor = 'bg-orange-500';
-              if (percent >= 100) barColor = 'bg-red-600';
-
-              return \`
-              <tr class="hover:bg-gray-50 border-b">
+              let barColor = 'bg-green-500'; if (percent > 80) barColor = 'bg-orange-500'; if (percent >= 100) barColor = 'bg-red-600';
+              const zoneBadge = a.defaultZoneName ? \`<span class="bg-purple-100 text-purple-600 text-[10px] px-1 rounded">\${a.defaultZoneName}</span>\` : '<span class="text-gray-300">-</span>';
+              return \`<tr class="hover:bg-gray-50 border-b">
                   <td class="font-medium">\${a.alias}</td>
+                  <td>\${zoneBadge}</td>
                   <td><span class="text-xs bg-gray-100 text-gray-600 rounded px-1.5 py-0.5">\${count} 个</span></td>
                   <td>\${a.stats.total}</td>
-                  <td>
-                      <div class="flex items-center gap-2">
-                          <div class="w-12 bg-gray-200 rounded-full h-1.5 overflow-hidden">
-                              <div class="\${barColor} h-1.5" style="width: \${Math.min(percent, 100)}%"></div>
-                          </div>
-                          <span class="text-[10px]">\${percent}%</span>
-                      </div>
-                  </td>
+                  <td><div class="flex items-center gap-2"><div class="w-12 bg-gray-200 rounded-full h-1.5 overflow-hidden"><div class="\${barColor} h-1.5" style="width: \${Math.min(percent, 100)}%"></div></div><span class="text-[10px]">\${percent}%</span></div></td>
                   <td class="text-right">
-                      <button onclick="editAccount(\${i})" class="text-blue-500 mr-2 text-xs">✎</button>
-                      <button onclick="delAccount(\${i})" class="text-red-500 text-xs">×</button>
+                      <button onclick="openAccountManage(\${originalIndex})" class="text-purple-600 mr-2 text-xs font-bold hover:bg-purple-50 px-1 rounded">📂 管理</button>
+                      <button onclick="editAccount(\${originalIndex})" class="text-blue-500 mr-2 text-xs">✎</button>
+                      <button onclick="delAccount(\${originalIndex})" class="text-red-500 text-xs">×</button>
                   </td>
               </tr>\`;
           }).join('');
       }
 
-      async function loadStats() {
-          const b = document.getElementById('btn_stats');
-          b.disabled = true;
-          try {
-              const r = await fetch('/api/stats');
-              const d = await r.json();
-              accounts.forEach(a => {
-                  const s = d.find(x => x.alias === a.alias);
-                  a.stats = s && !s.error ? s : { total: 0, max: 100000 };
-              });
-              renderTable();
-          } catch(e) {}
-          b.disabled = false;
+      // ================= 基础逻辑 (Account/Deploy/Sync) =================
+      async function loadAccounts() { try { const r = await fetch('/api/accounts'); accounts = await r.json(); accounts.forEach(a => a.stats = a.stats || {total:0,max:100000}); renderTable(); } catch(e){} }
+      
+      async function saveAccount() { 
+          const o={
+              alias:document.getElementById('in_alias').value,
+              accountId:document.getElementById('in_id').value,
+              email:document.getElementById('in_email').value,
+              globalKey:document.getElementById('in_gkey').value,
+              defaultZoneName:document.getElementById('in_zone_name').value,
+              defaultZoneId:document.getElementById('in_zone_id').value,
+              stats:{total:0,max:100000}
+          }; 
+          ['cmliu','joey','ech'].forEach(t=>o['workers_'+t]=document.getElementById('in_workers_'+t).value.split(/,|，/).map(s=>s.trim()).filter(s=>s)); 
+          if(editingIndex>=0)accounts[editingIndex]=o; else accounts.push(o); 
+          await fetch('/api/accounts',{method:'POST',body:JSON.stringify(accounts)}); 
+          renderTable(); 
+          document.getElementById('account_form').classList.add('hidden'); 
       }
 
-      function editAccount(i) {
-          editingIndex = i;
-          const a = accounts[i];
-          document.getElementById('in_alias').value = a.alias;
-          document.getElementById('in_id').value = a.accountId;
-          document.getElementById('in_token').value = a.apiToken;
+      function editAccount(i){ 
+          editingIndex=i; const a=accounts[i]; 
+          document.getElementById('in_alias').value=a.alias; 
+          document.getElementById('in_id').value=a.accountId; 
+          document.getElementById('in_email').value=a.email||""; 
+          document.getElementById('in_gkey').value=a.globalKey||""; 
+          document.getElementById('in_zone_name').value=a.defaultZoneName||""; 
+          document.getElementById('in_zone_id').value=a.defaultZoneId||""; 
           
-          ['cmliu', 'joey', 'ech'].forEach(t => {
-              document.getElementById('in_workers_' + t).value = (a['workers_' + t] || []).join(',');
-          });
-          
-          document.getElementById('account_form').classList.remove('hidden');
+          const select = document.getElementById('in_zone_select');
+          if(a.defaultZoneName) { select.innerHTML = \`<option value="\${a.defaultZoneId}" data-name="\${a.defaultZoneName}" selected>\${a.defaultZoneName}</option>\`; } else { select.innerHTML = '<option value="">(请点击读取)</option>'; }
+
+          ['cmliu','joey','ech'].forEach(t=>document.getElementById('in_workers_'+t).value=(a['workers_'+t]||[]).join(',')); 
+          document.getElementById('account_form').classList.remove('hidden'); 
       }
 
-      function resetFormForAdd() {
-          editingIndex = -1;
-          document.querySelectorAll('#account_form input').forEach(i => i.value = '');
-          document.getElementById('account_form').classList.remove('hidden');
+      async function delAccount(i){ if(confirm('删除账号配置？')){ accounts.splice(i,1); await fetch('/api/accounts',{method:'POST',body:JSON.stringify(accounts)}); renderTable(); } }
+      function resetFormForAdd(){ editingIndex=-1; document.querySelectorAll('#account_form input').forEach(i=>i.value=''); document.getElementById('in_zone_select').innerHTML='<option value="">(请先填写API信息后点击读取)</option>'; document.getElementById('account_form').classList.remove('hidden'); }
+      function cancelEdit(){ document.getElementById('account_form').classList.add('hidden'); }
+      async function deleteFromEdit(){ if(editingIndex>=0)delAccount(editingIndex); cancelEdit(); }
+      async function loadStats(){ const b=document.getElementById('btn_stats'); b.disabled=true; try{ const r=await fetch('/api/stats'); const d=await r.json(); accounts.forEach(a=>{ const s=d.find(x=>x.alias===a.alias); a.stats=s&&!s.error?s:{total:0,max:100000}; }); renderTable(); }catch(e){} b.disabled=false; }
+      
+      async function deploy(t, sha='') {
+         const btn = document.getElementById(\`btn_deploy_\${t}\`); const ot = btn.innerText; btn.innerText = "⏳ 部署中..."; btn.disabled = true;
+         const vars = []; document.querySelectorAll(\`.var-row-\${t}\`).forEach(r => { const k = r.querySelector('.key').value; const v = r.querySelector('.val').value; if(k) vars.push({key: k, value: v}); });
+         await fetch(\`/api/settings?type=\${t}\`, {method: 'POST', body: JSON.stringify(vars)});
+         const logBox = document.getElementById('logs'); logBox.classList.remove('hidden'); logBox.innerHTML = \`<div class="text-yellow-400">⚡ Deploying \${t}...</div>\`;
+         try { const res = await fetch(\`/api/deploy?type=\${t}\`, { method: 'POST', body: JSON.stringify({ type: t, variables: vars, deletedVariables: deletedVars[t], targetSha: sha }) }); const logs = await res.json(); logBox.innerHTML += logs.map(l => \`<div>[\${l.success ? 'OK' : 'ERR'}] \${l.name}: <span class="text-gray-400">\${l.msg}</span></div>\`).join(''); deletedVars[t] = []; setTimeout(() => { checkUpdate(t); checkDeployConfig(t); }, 1000); } catch(e) { logBox.innerHTML += \`<div class="text-red-500">Error: \${e.message}</div>\`; }
+         btn.innerText = ot; btn.disabled = false;
       }
 
-      async function saveAccount() {
-          const o = {
-              alias: document.getElementById('in_alias').value,
-              accountId: document.getElementById('in_id').value,
-              apiToken: document.getElementById('in_token').value
-          };
-          ['cmliu', 'joey', 'ech'].forEach(t => {
-              o['workers_' + t] = document.getElementById('in_workers_' + t).value.split(/,|，/).map(s => s.trim()).filter(s => s);
-          });
-          
-          // 保留原有 Stats
-          if (editingIndex >= 0 && accounts[editingIndex]) {
-              o.stats = accounts[editingIndex].stats;
-          } else {
-              o.stats = { total: 0, max: 100000 };
-          }
-          
-          if (editingIndex >= 0) accounts[editingIndex] = o;
-          else accounts.push(o);
-          
-          await fetch('/api/accounts', {method: 'POST', body: JSON.stringify(accounts)});
-          renderTable();
-          document.getElementById('account_form').classList.add('hidden');
-      }
-
-      async function delAccount(i) {
-          if (confirm('确认删除此账号?')) {
-              accounts.splice(i, 1);
-              await fetch('/api/accounts', {method: 'POST', body: JSON.stringify(accounts)});
-              renderTable();
-          }
-      }
-
-      function cancelEdit() {
-          document.getElementById('account_form').classList.add('hidden');
-      }
-
-      async function deleteFromEdit() {
-          if (editingIndex >= 0) delAccount(editingIndex);
-          cancelEdit();
-      }
-
-      // 同步功能
       function selectSyncAccount(t) {
           const m = document.getElementById('sync_select_modal');
           const l = document.getElementById('sync_list');
           const v = accounts.filter(a => a[\`workers_\${t}\`] && a[\`workers_\${t}\`].length);
-          
           l.innerHTML = '';
           v.forEach(a => {
               const b = document.createElement('button');
@@ -1224,81 +1247,90 @@ const TEMPLATES = {
       async function doSync(a, t, n) {
           document.getElementById('sync_select_modal').classList.add('hidden');
           if (!confirm('确认覆盖当前变量配置?')) return;
-          
           const r = await fetch('/api/fetch_bindings', {
               method: 'POST',
-              body: JSON.stringify({ accountId: a.accountId, apiToken: a.apiToken, workerName: n })
+              body: JSON.stringify({ accountId: a.accountId, email: a.email, globalKey: a.globalKey, workerName: n })
           });
           const d = await r.json();
-          
           if (d.success) {
               const c = document.getElementById(\`vars_\${t}\`);
-              c.innerHTML = '';
-              deletedVars[t] = [];
+              c.innerHTML = ''; deletedVars[t] = [];
               d.data.forEach(v => addVarRow(t, v.key, v.value));
-          } else {
-              alert(d.msg);
-          }
+              Swal.fire('同步成功', '变量已更新', 'success');
+          } else { Swal.fire('同步失败', d.msg, 'error'); }
       }
 
-      async function checkUpdate(t) {
-          const e = document.getElementById(\`ver_\${t}\`);
-          try {
-              const r = await fetch(\`/api/check_update?type=\${t}\`);
-              const d = await r.json();
-              
-              if (d.remote && (!d.local || d.remote.sha !== d.local.sha)) {
-                  e.innerHTML = \`<span class="text-red-500 font-bold animate-pulse">🔴 New: \${timeAgo(d.remote.date)}</span>\`;
-              } else {
-                  e.innerHTML = \`<span class="text-green-600">✅ Latest</span>\`;
-              }
-          } catch(e) { e.innerHTML = "Check Fail"; }
-      }
+      function renderProxySelector(){ const c=document.getElementById('ech_proxy_selector_container'); let h='<select id="ech_proxy_select" onchange="applyEchProxy()" class="w-full text-xs border rounded p-1 mb-1"><option value="">-- Select ProxyIP --</option>'; ECH_PROXIES.forEach(g=>{ h+=\`<optgroup label="\${g.group}">\`; g.list.forEach(i=>h+=\`<option value="\${i.split(' ')[0]}">\${i}</option>\`); h+='</optgroup>'; }); c.innerHTML=h+'</select>'; }
+      function applyEchProxy(){ const v=document.getElementById('ech_proxy_select').value; if(v)addVarRow('ech','PROXYIP',v); }
+      function addVarRow(t,k='',v=''){ const c=document.getElementById(\`vars_\${t}\`); const d=document.createElement('div'); d.className=\`flex gap-1 items-center mb-1 var-row-\${t}\`; let h=''; if(t==='cmliu'&&(k==='PROXYIP'||k==='DOH')){ const options=k==='DOH'?["https://dns.jhb.ovh/joeyblog","https://doh.cmliussss.com/CMLiussss","cloudflare-ech.com"]:ECH_PROXIES.flatMap(g=>g.list); h=\`<select onchange="this.previousElementSibling.value=this.value" class="w-4 border rounded text-[8px] bg-gray-50 cursor-pointer"><option>▼</option>\${options.map(u=>\`<option value="\${u.split(' ')[0]}">\${u}</option>\`).join('')}</select>\`; } d.innerHTML=\`<input class="input-field w-1/3 key font-bold" placeholder="Key" value="\${k}"><input class="input-field w-2/3 val" placeholder="Val" value="\${v}">\${h}<button onclick="removeVarRow(this,'\${t}')" class="text-gray-300 hover:text-red-500 px-1 font-bold">×</button>\`; c.appendChild(d); }
+      function removeVarRow(b,t){ const k=b.parentElement.querySelector('.key').value; if(k)deletedVars[t].push(k); b.parentElement.remove(); }
+      async function loadVars(t){ const c=document.getElementById(\`vars_\${t}\`); c.innerHTML='<div class="text-center text-gray-300">...</div>'; try{ const r=await fetch(\`/api/settings?type=\${t}\`); const v=await r.json(); const m=new Map(); if(Array.isArray(v))v.forEach(x=>m.set(x.key,x.value)); TEMPLATES[t].defaultVars.forEach(k=>{ if(!m.has(k))m.set(k,k===TEMPLATES[t].uuidField?crypto.randomUUID():'') }); c.innerHTML=''; deletedVars[t]=[]; m.forEach((val,key)=>addVarRow(t,key,val)); }catch(e){ c.innerHTML='Load Error'; } }
+      async function loadGlobalConfig(){ try{ const r=await fetch('/api/auto_config'); const c=await r.json(); document.getElementById('auto_update_toggle').checked=!!c.enabled; document.getElementById('auto_update_interval').value=c.interval||30; document.getElementById('fuse_threshold').value=c.fuseThreshold||0; }catch(e){} }
+      async function saveAutoConfig(){ await fetch('/api/auto_config',{method:'POST',body:JSON.stringify({enabled:document.getElementById('auto_update_toggle').checked,interval:document.getElementById('auto_update_interval').value,fuseThreshold:document.getElementById('fuse_threshold').value})}); alert('已保存配置'); }
+      async function checkUpdate(t){ const e=document.getElementById(\`ver_\${t}\`); try{ const r=await fetch(\`/api/check_update?type=\${t}\`); const d=await r.json(); if(d.remote&&(!d.local||d.remote.sha!==d.local.sha))e.innerHTML=\`<span class="text-red-500 font-bold animate-pulse">🔴 New: \${timeAgo(d.remote.date)}</span>\`; else e.innerHTML=\`<span class="text-green-600">✅ Latest</span>\`; }catch(e){ e.innerHTML="Check Fail"; } }
+      function timeAgo(s){ const sec=(new Date()-new Date(s))/1000; if(sec>86400)return Math.floor(sec/86400)+"天前"; if(sec>3600)return Math.floor(sec/3600)+"小时前"; return "刚刚"; }
+      function refreshUUID(t){ const k=TEMPLATES[t].uuidField; if(k)document.querySelectorAll(\`.var-row-\${t}\`).forEach(r=>{ if(r.querySelector('.key').value===k){ const i=r.querySelector('.val'); i.value=crypto.randomUUID(); i.classList.add('bg-green-100'); setTimeout(()=>i.classList.remove('bg-green-100'),500); } }); }
+      async function checkDeployConfig(t){ try{ const r=await fetch(\`/api/deploy_config?type=\${t}\`); const c=await r.json(); deployConfigs[t]=c; const b=document.getElementById(\`badge_\${t}\`); if(c.mode==='fixed'){ b.className="text-[9px] px-1.5 py-0.5 rounded text-white bg-orange-500 font-bold"; b.innerText="🔒 Locked"; }else{ b.className="text-[9px] px-1.5 py-0.5 rounded text-white bg-green-500"; b.innerText="Auto Update"; } }catch(e){} }
 
-      function timeAgo(s) {
-          const sec = (new Date() - new Date(s)) / 1000;
-          if (sec > 86400) return Math.floor(sec / 86400) + "天前";
-          if (sec > 3600) return Math.floor(sec / 3600) + "小时前";
-          return "刚刚";
-      }
-
-      function refreshUUID(t) {
-          const k = TEMPLATES[t].uuidField;
-          if (k) {
-              document.querySelectorAll(\`.var-row-\${t}\`).forEach(r => {
-                  if (r.querySelector('.key').value === k) {
-                      const input = r.querySelector('.val');
-                      input.value = crypto.randomUUID();
-                      input.classList.add('bg-green-100');
-                      setTimeout(() => input.classList.remove('bg-green-100'), 500);
-                  }
-              });
-          }
-      }
-
-      function toggleLayout() {
-          currentLayout = currentLayout === 'standard' ? 'vertical' : 'standard';
-          localStorage.setItem('cw_layout', currentLayout);
-          applyLayout();
-      }
-
-      function applyLayout() {
-          const c = document.getElementById('layout_container');
-          const sp = document.getElementById('section_projects');
-          const sa = document.getElementById('section_accounts');
+      // 历史记录 & 收藏
+      async function openVersionHistory(type){ currentHistoryType=type; refreshHistory(); }
+      async function refreshHistory() {
+          const type = currentHistoryType; if(!type) return;
+          const limit = document.getElementById('history_limit_input').value || 10;
+          const modal=document.getElementById('history_modal');const hList=document.getElementById('history_list');const fList=document.getElementById('fav_list');const fSec=document.getElementById('fav_section');
           
-          if (currentLayout === 'vertical') {
-              c.className = "flex flex-col gap-4";
-              sp.className = "grid grid-cols-1 md:grid-cols-2 gap-4 order-first";
-              sa.className = "w-full order-last";
-          } else {
-              c.className = "grid grid-cols-1 lg:grid-cols-12 gap-4";
-              sa.className = "lg:col-span-7 space-y-4";
-              sp.className = "lg:col-span-5 space-y-4";
-          }
+          modal.classList.remove('hidden');
+          hList.innerHTML='<div class="text-center text-gray-400 text-xs py-4">加载中...</div>';
+          fList.innerHTML=''; 
+          fSec.classList.add('hidden'); // 先隐藏，有数据再显示
+
+          try{
+            const[histRes,favRes]=await Promise.all([fetch(\`/api/check_update?type=\${type}&mode=history&limit=\${limit}\`),fetch(\`/api/favorites?type=\${type}\`)]);
+            const histData=await histRes.json();const favData=await favRes.json();
+            
+            // 收藏夹渲染
+            if(favData && Array.isArray(favData) && favData.length > 0){
+                fSec.classList.remove('hidden');
+                favData.forEach(item=>renderHistoryItem(type,item,fList,true));
+            }
+
+            hList.innerHTML='';const latestBtn=document.createElement('div');latestBtn.className="bg-green-50 hover:bg-green-100 p-2 rounded border border-green-200 cursor-pointer transition mb-2";latestBtn.innerHTML=\`<div class="flex justify-between items-center"><span class="font-bold text-green-700 text-xs">⚡ Always Latest</span></div>\`;latestBtn.onclick=()=>{modal.classList.add('hidden');deploy(type,'latest');};hList.appendChild(latestBtn);
+            
+            if(histData.history){
+                histData.history.forEach(commit=>{
+                    const item={sha:commit.sha,date:commit.commit.committer.date,message:commit.commit.message};
+                    const isFav=favData&&favData.find(f=>f.sha===item.sha);
+                    renderHistoryItem(type,item,hList,false,isFav);
+                });
+            }
+          }catch(e){hList.innerHTML='<div class="text-red-400 text-xs">网络错误: ' + e.message + '</div>';}
+      }
+      
+      function renderHistoryItem(type,item,container,isFavSection,isFavInHist){
+          const shortSha=item.sha.substring(0,7);
+          const date=new Date(item.date).toLocaleString();
+          const isCurrent=deployConfigs[type]&&deployConfigs[type].currentSha===item.sha;
+          const el=document.createElement('div');
+          el.className=\`group relative p-2 rounded border transition mb-1 flex gap-2 \${isCurrent?'bg-orange-50 border-orange-300':'bg-white border-gray-100 hover:border-blue-200'}\`;
+          
+          const starBtn=document.createElement('button');
+          starBtn.className=\`text-sm focus:outline-none \${(isFavSection||isFavInHist)?'text-orange-400':'text-gray-300 hover:text-orange-400'}\`;
+          starBtn.innerHTML=(isFavSection||isFavInHist)?'★':'☆';
+          starBtn.onclick=(e)=>{e.stopPropagation();toggleFavorite(type,item,isFavSection||isFavInHist);};
+          
+          const content=document.createElement('div');
+          content.className="flex-1 cursor-pointer overflow-hidden";
+          content.innerHTML=\`<div class="flex justify-between items-center mb-0.5"><span class="font-mono text-[10px] bg-slate-100 px-1 rounded text-slate-600">\${shortSha}</span><span class="text-[9px] text-gray-400">\${date}</span></div><div class="text-[10px] text-gray-700 truncate">\${item.message}</div>\`;
+          content.onclick=()=>{if(confirm(\`确认回滚/锁定到版本 [\${shortSha}]？\`)){document.getElementById('history_modal').classList.add('hidden');deploy(type,item.sha);}};
+          
+          el.appendChild(starBtn);el.appendChild(content);container.appendChild(el);
+      }
+      
+      async function toggleFavorite(type,item,isRemove){
+          await fetch('/api/favorites',{method:'POST',body:JSON.stringify({action:isRemove?'remove':'add',item:item,type:type})});
+          refreshHistory();
       }
 
-      // 启动
       init();
     </script>
   </body></html>
