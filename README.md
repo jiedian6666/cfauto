@@ -1,27 +1,46 @@
-# 🚀 Cloudflare Worker 多项目部署管理器 (Worker Manager Pro V9.8)
-可能这个项目并不完善，请自行AI修改
+# 🚀 Cloudflare Worker 智能部署中控 (Worker Manager Pro V9.9.1)
 
-这是一个运行在 Cloudflare Worker 上的高级中控面板，专为管理和批量部署复杂的 Worker 项目（如 EdgeTunnel, 少年你相信光吗, ECH Proxy 等）而设计。
+> 全部代码为claude code 完成
+> 自行修改延伸功能
 
-**V9.8 版本** 解决了传统部署的繁琐痛点，支持多账号管理、版本回滚、自定义域名自动化绑定、以及智能的资源清理功能。
+
+> **当前版本**: V9.9.1 Pro
+> **核心特性**: 批量部署 / 多账号管理 / 自动域名绑定 / 版本回滚 / 智能修复
+
+这是一个运行在 Cloudflare Worker 上的**高级中控面板**，专为管理和批量部署复杂的 Worker 项目（如 EdgeTunnel, 少年你相信光吗, ECH Proxy 等）而设计。彻底解决了传统部署繁琐、配置难同步、资源难清理的痛点。
 
 ---
 
-## ✨ 核心功能特性
+## ✨ 核心功能特性 (V9.9.1 更新)
 
-* **⚡ 批量极速部署**：一键在多个 Cloudflare 账号下部署新项目，自动处理代码上传、变量注入和依赖绑定。
-* **🛡️ 智能配置修复**：
-    * **防崩溃保护 (Fix 1101)**：自动检测并注入必要的环境变量（如 UUID），防止新项目启动失败。
-    * **上传修复 (Fix 808)**：修正了 `FormData` 上传协议，确保代码能正确推送至 Cloudflare。
-* **🧹 资源深度清理**：删除 Worker 项目时，支持 **级联删除** 绑定的 KV 存储空间，防止垃圾资源堆积。
-* **🌐 域名深度管理**：
-    * **预设域名**：账号管理中可直接读取并预设根域名（Zone）。
-    * **自动绑定**：批量部署时只需输入前缀，系统自动完成 `前缀.预设域名.com` 的解析。
-    * **默认域名开关**：支持一键禁用/启用 `*.workers.dev` 默认长域名。
-* **📜 版本控制大师**：
-    * 查看 GitHub 提交历史并一键回滚。
-    * **收藏夹功能**：将稳定好用的版本加入收藏，永久置顶，防止被自动更新覆盖。
-* **🌍 内置全量资源**：内置完整的 ProxyIP 列表（涵盖香港、日本、韩国、新加坡、美国、欧洲等全节点）。
+* **⚡ 批量极速部署**
+* **一键分发**：支持同时向多个 Cloudflare 账号部署新项目。
+* **KV 智能开关**：新增 **KV 绑定开关**。针对 `Joey` 等无需 KV 的项目，可选择纯变量模式部署，节省资源。
+* **自动配置**：自动处理代码上传、变量注入、UUID 生成和依赖绑定。
+
+
+* **🔄 双向同步与修复**
+* **同步修复 (Fix Sync)**：删除 Worker 时，自动同步清理中控端的账号配置，防止“幽灵项目”残留。
+* **防崩溃保护**：自动检测并注入必要的环境变量（如 UUID），防止新项目启动失败。
+* **上传修复 (Fix 808)**：内置修正版 `FormData` 协议，确保代码能正确推送到 CF 接口。
+
+
+* **🧹 资源安全清理**
+* **级联删除**：执行删除操作时，遵循 `获取绑定 -> 删除 Worker -> 删除 KV 空间` 的安全顺序，防止资源被占用导致删除失败。
+
+
+* **🌐 域名深度管理**
+* **预设域名读取**：自动读取账号下的 Zone（根域名）。
+* **自定义前缀**：部署时只需输入前缀（如 `hk`），系统自动生成 `hk.你的域名.com` 并绑定。
+* **隐私保护**：支持一键禁用 `*.workers.dev` 默认长域名，防止被扫描。
+
+
+* **📜 版本控制大师**
+* **时间轴对比**：直观显示 **上游最新提交时间** vs **本地部署时间**。
+* **一键回滚**：支持查看 GitHub 历史并回滚到任意旧版本。
+* **收藏夹**：将稳定版本加入收藏（Locked），防止误触更新。
+
+
 
 ---
 
@@ -29,133 +48,116 @@
 
 只需简单 4 步，即可拥有自己的 Worker 中控台。
 
-### 第一步：创建主控 Worker
+### 1️⃣ 第一步：创建主控 Worker
 
-1.  登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)。
-2.  进入 **Workers & Pages** -> **Overview**。
-3.  点击 **Create Application** -> **Create Worker**。
-4.  命名为 `manager` (或你喜欢的名字)，点击 **Deploy**。
-5.  点击 **Edit code**，将本项目提供的 `worker.js` (V9.8) **完整代码** 粘贴进去。
-6.  点击 **Save and deploy**。
+1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)。
+2. 进入 **Workers & Pages** -> **Overview** -> **Create Application** -> **Create Worker**。
+3. 命名为 `manager` (建议)，点击 **Deploy**。
+4. 点击 **Edit code**，将本项目提供的 `worker.js` (V9.9.1) **完整代码** 粘贴覆盖。
+5. 点击 **Save and deploy**。
 
-### 第二步：创建并绑定 KV 存储 (⚠️ 关键步骤)
+### 2️⃣ 第二步：绑定 KV 存储 (⚠️ 核心)
 
-此中控需要一个 KV 空间来保存你的账号信息和配置。**如果不绑定，中控将无法启动。**
+**中控本身需要一个 KV 来存储账号数据，不绑定无法启动！**
 
-1.  在刚才创建的 Worker 页面，点击顶部的 **Settings** (设置) -> **Variables** (变量)。
-2.  向下滚动找到 **KV Namespace Bindings**。
-3.  点击 **Add binding** (添加绑定)。
-    * **Variable name (变量名)**: 填写 `CONFIG_KV` (**注意：必须完全一致，大写，否则报错 1101**)
-    * **KV Namespace**: 点击 "Create new KV namespace"，起个名字叫 `manager_data`，然后点击 **Add**。
-4.  点击 **Save and deploy**。
+1. 在 Worker 编辑页面的 **Settings** (设置) -> **Variables** (变量)。
+2. 找到 **KV Namespace Bindings**，点击 **Add binding**。
+3. **Variable name**: 填写 `CONFIG_KV` (**必须大写，完全一致**)
+4. **KV Namespace**: 点击 "Create new KV namespace"，命名为 `manager_data`，点击 **Add**。
+5. 点击 **Save and deploy**。
 
-### 第三步：设置登录密码与 Token
+### 3️⃣ 第三步：设置安全密码
 
-为了防止他人访问你的中控面板，必须设置访问密码。
+1. 同样在 **Settings** -> **Variables** -> **Environment Variables**。
+2. 点击 **Add variable**：
+* **Variable name**: `ACCESS_CODE`
+* **Value**: 设置你的登录密码（如 `admin888`）。
 
-1.  同样在 **Settings** -> **Variables** 页面。
-2.  找到 **Environment Variables** (环境变量)。
-3.  点击 **Add variable** 添加以下变量：
-    * **变量名**: `ACCESS_CODE`
-    * **值**: 填写你自己设定的登录密码 (例如 `admin123`)
-4.  *(强烈推荐)* 添加 GitHub Token 以防止 API 限流：
-    * **变量名**: `GITHUB_TOKEN`
-    * **值**: 填写你的 GitHub PAT (获取方法见下文)
-5.  点击 **Save and deploy**。
 
-### 第四步：开始使用
+3. *(可选但推荐)* 防止 GitHub API 限流：
+* **Variable name**: `GITHUB_TOKEN`
+* **Value**: 你的 GitHub PAT (获取方式见下文)。
 
-1.  点击 Worker 概览页面的 URL (例如 `https://manager.你的前缀.workers.dev`)。
-2.  首次访问会看到登录界面。
-3.  输入你在第三步设置的 `ACCESS_CODE` 即可进入。
+
+4. 点击 **Save and deploy**。
+
+### 4️⃣ 第四步：开始使用
+
+访问你的 Worker 域名（如 `https://manager.你的前缀.workers.dev`），输入密码即可进入控制台。
 
 ---
 
-## 🔑 如何获取核心数据 (API Key & Token)
+## 🔑 核心数据获取指南
 
-在中控面板添加账号或部署时，你需要用到以下信息。
+### 🅰️ Cloudflare 账号信息
 
-### 1. Cloudflare Account ID (账户 ID)
-* 登录 Cloudflare 后，点击 URL 栏中的域名（或者直接看右侧边栏）。
-* 在页面右下角的 **API** 区域，你会看到 **Account ID**。
-* 它是一串 32 位的字符（例如 `d6a5...`）。
+在添加账号时需要填写：
 
-### 2. Cloudflare Global API Key (全局密钥)
-*注意：本项目涉及 KV 创建、Worker 部署、域名绑定等跨域操作，**必须使用 Global API Key**。*
+* **Account ID**: 登录 CF 后，URL 地址栏 `dash.cloudflare.com/` 后面的那串字符。
+* **Global API Key**:
+1. 点击右上角头像 -> **My Profile** -> **API Tokens**。
+2. 找到 **Global API Key** -> View -> 输入密码复制。
 
-* **获取路径**：
-    1.  点击右上角的用户头像 -> **My Profile** (我的个人资料)。
-    2.  点击左侧菜单的 **API Tokens**。
-    3.  找到下方的 **Global API Key** 行。
-    4.  点击右侧的 **View** (查看)。
-    5.  输入密码验证后，复制那串以 `key` 开头的长字符。
 
-### 3. GitHub Token (用于解除限流) 
-*注意：如果不填这个，GitHub 每小时只允许请求 60 次，容易导致“检查更新”失败。填入后限额提升至 5000 次。*
+* *注意：必须使用 Global Key，普通 Token 权限不足以创建 KV 和绑定域名。*
 
-* **获取路径**：
-    1.  登录 GitHub，点击右上角头像 -> **Settings**。
-    2.  在左侧边栏最底部点击 **Developer settings**。
-    3.  点击左侧 **Personal access tokens** -> **Tokens (classic)**。
-    4.  点击右上角 **Generate new token (classic)**。
-    5.  **Note (备注)**: 随便填，例如 `WorkerManager`。
-    6.  **Expiration (过期时间)**: 建议选 `No expiration` (永不过期)。
-    7.  **Select scopes (选择权限)**:
-        * 如果你只部署公共项目（如 CMliu/EdgeTunnel）：**不需要勾选任何框**，直接拉到底。
-        * 如果你要部署自己的私有仓库：请勾选 `repo`。
-    8.  点击 **Generate token**。
-    9.  **复制** 生成的那串 `ghp_` 开头的字符，填入 Worker 的环境变量 `GITHUB_TOKEN` 中。
+
+
+### 🅱️ GitHub Token (用于解除限流)
+
+如果不配置此项，GitHub 每小时限制请求 60 次，可能导致无法检查更新。
+
+1. 登录 GitHub -> 头像 -> **Settings** -> **Developer settings**。
+2. **Personal access tokens** -> **Tokens (classic)** -> **Generate new token (classic)**。
+3. **Scopes**: 如果只用公共仓库（如 cmliu），**不需要勾选任何权限**。
+4. 生成并复制 `ghp_` 开头的 Token。
 
 ---
 
-## 📖 功能使用指南
+## 📖 常用操作指南
 
-### 1. 添加与管理账号
-* 点击「**➕ 添加账号**」。
-* 填写 API 信息。
-* **(新功能)** 在“预设域名”栏，点击「**☁️ 读取**」。系统会列出该账号下的所有域名，选择一个作为该账号的主域名（用于后续自动生成子域名）。
-* 点击保存。
+### ✨ 批量部署新项目
 
-### 2. 批量部署新项目
-* 点击顶部的「**✨ 批量部署**」。
-* **配置**：输入 Worker 名称（例如 `hk-proxy`），选择模板（如 CMliu），输入 KV 名称。
-* **域名选项**：
-    * **[ ] 禁用默认域名**：勾选后，`hk-proxy.workers.dev` 将无法访问（更安全/防封）。
-    * **自定义域名**：输入前缀（如 `hk`）。系统会自动结合账号的预设域名，将其绑定到 `hk.example.com`。
-* **选择账号**：勾选你要部署到的账号。
-* 点击「**🚀 开始部署**」，观察日志反馈。
+1. 点击顶部「**✨ 批量部署**」。
+2. **模板选择**：
+* `CMliu`: 经典 EdgeTunnel，建议开启 KV。
+* `Joey`: 推荐关闭 KV (取消勾选 "绑定 KV 存储")，使用纯变量模式。
 
-### 3. 深度资源管理 (删除)
-* 在账号列表中，点击对应账号右侧的「**📂 管理**」按钮。
-* 列表会显示该账号下所有的 Worker。
-* 点击「**🗑️ 删除**」。
 
-### 4. 变量同步与更新
-* **变量修改**：在项目卡片中展开“变量列表”，修改后点击“部署更新”。
-* **反向同步**：点击「**🔄 同步**」按钮，中控会从 Cloudflare 线上拉取当前的变量配置覆盖本地，这在你在 CF 后台手动修改过变量时非常有用。
+3. **KV 设置**：如果开启 KV，请填写 KV 名称（中控会自动创建）。
+4. **域名设置**：
+* 勾选 `禁用默认域名` 可提高隐蔽性。
+* 填写 `自定义域名` 前缀（前提：账号已读取到预设域名）。
 
-### 5. 版本历史与收藏
-* 点击卡片右上角的「**📜 历史/收藏**」。
-* **收藏**：点击 ⭐ 将当前版本加入收藏夹。收藏的版本会显示在列表最顶部。
-* **回滚**：点击任意历史记录，即可将代码回滚到该历史版本。
+
+5. 勾选目标账号 -> **🚀 开始部署**。
+
+### 🔄 变量同步 (反向更新)
+
+如果你在 Cloudflare 后台手动修改了某个 Worker 的变量：
+
+1. 在中控面板找到该项目。
+2. 点击「**🔄 同步**」。
+3. 中控会将云端的最新配置拉取回本地数据库，确保数据一致。
+
+### 🗑️ 安全删除
+
+1. 点击账号右侧的「**📂 管理**」。
+2. 点击「**🗑️ 删除**」。
+3. **勾选 "同时删除绑定的 KV"** (推荐)，系统将自动清理残留资源。
 
 ---
 
-## ❓ 常见问题 (FAQ)
+## 📝 内置模板说明
 
-**Q: 部署后访问报错 Error 1101?**
-A: V9.8 版本已包含自动修复逻辑。如果仍报错，请检查：
-1. 中控 Worker 是否绑定了 `CONFIG_KV`。
-2. 被部署的 Worker 对应的 KV 是否创建成功（批量部署日志会显示）。
-
-**Q: 为什么上传代码失败 (Error 808)?**
-A: 这是一个 Cloudflare API 的机制问题，V9.8 已经通过移除 `Content-Type` 头解决了此问题。
-
-**Q: 为什么“读取域名”失败？**
-A: 请确保填写的 Email 和 Global API Key 正确，并且该账号下确实添加了站点（Site/Zone）。普通的 API Token 可能没有 `Zone.Read` 权限，建议使用 Global Key。
+| 模板代码 | 项目名称 | 特性说明 | 建议配置 |
+| --- | --- | --- | --- |
+| **cmliu** | EdgeTunnel (Beta 2.0) | 功能最全，支持订阅 | 开启 KV |
+| **joey** | 少年你相信光吗 | 自动修复，极简 | **关闭 KV** (变量模式) |
+| **ech** | ECH Proxy | 无需维护，WebSocket | 关闭 KV |
 
 ---
 
 ## ⚠️ 免责声明
 
-本项目仅供技术研究和学习使用，请勿用于任何非法用途。开发者不对使用本工具产生的任何后果负责。请妥善保管你的 API Key，切勿泄露给他人。
+本项目仅供技术研究和学习使用，请勿用于任何非法用途。开发者不对使用本工具产生的任何后果负责。您的 API Key 仅保存在您自己的 Cloudflare KV 中，请妥善保管。
