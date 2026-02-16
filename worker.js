@@ -1,37 +1,9 @@
 /**
- * Cloudflare Worker 多项目部署管理器 (V10.2.3 - Starfield Theme)
- * 更新日志 (V10.2.3)：
- * 1. [Fix] 重写 serverSideObfuscate，移除危险的注释删除正则（会破坏模板字面量中的 HTML/URL 内容）。
- *
- * 1. [Fix] DEPLOY_CONFIG 仅在至少一个 worker 成功部署后才更新，防止部署失败时虚假标记为最新。
- * 2. [Fix] 手动部署现在会读取“自动混淆”开关，开启时自动应用服务器端混淆。
- *
- * 更新日志 (V10.2.1)：
- * 1. [Fix] 修复 coreDeployLogic 中 targetSha='latest' 被当作 git ref 导致自动更新代码下载失败。
- * 2. [Fix] 修复部署后 deploy config 被错误锁定为 fixed 模式，导致后续自动更新永远跳过。
- * 3. [Fix] 修复历史版本 "Always Latest" 部署触发同样的 URL 构造错误。
- *
- * 更新日志 (V10.2.0)：
- * 1. [Feature] 新增暗黑星空模式 / 明亮模式主题切换。
- * 2. [Feature] Canvas 动态星空背景（闪烁星星 + 流星 + 星云光晕）。
- * 3. [Feature] 卡片毛玻璃半透明效果，全组件暗黑模式适配。
- * 4. [Feature] 主题选择通过 localStorage 持久化。
- *
- * 更新日志 (V10.1.0)：
- * 1. [Feature] 管理弹窗新增修改账号 workers.dev 子域名前缀功能。
- * 2. [Feature] 新增 /api/get_subdomain 和 /api/change_subdomain 后端 API。
- * 3. [Improve] 管理弹窗并行加载 Workers 列表和子域名信息，提升加载速度。
- * 4. [UX] 修改子域名带二次确认对话框，防止误操作。
- *
- * 更新日志 (V10.0.0)：
- * 1. [Security] 登录改为 POST，密码不再通过 URL 明文传递；Cookie 增加 Secure 标志。
- * 2. [Security] API 增加 HTTP 方法校验，POST 请求增加 CSRF Origin 检查。
- * 3. [Fix] 修复 serverSideObfuscate 正则误删 URL 的严重 bug。
- * 4. [Fix] 修复前端 checkUpdate catch 变量名冲突导致错误不显示的 bug。
- * 5. [Fix] 修复编辑账号时 stats 被重置的问题。
- * 6. [Improve] 熔断和自动更新改为动态模板识别，不再硬编码。
- * 7. [Improve] 统一错误响应；前后端模板数据由后端注入，消除重复。
- * 8. [Improve] compatibility_date 自动使用当前日期。
+ * Cloudflare Worker 多项目部署管理器 (V10.3.3 - Starfield Theme)
+ * 更新日志 (V10.3.3)：
+ * 1. [Fix] 重写 serverSideObfuscate 为安全模式，仅用头部注释+尾部变量，修复 cmliu 1101。
+ * 2. [Fix] 子域名修改改为 DELETE+PUT 两步操作，并增加友好提示。
+ * 完整历史版本记录见 CHANGELOG.md
  */
 
 // ==========================================
@@ -184,8 +156,8 @@ export default {
                 return await handleGetCode(env, type);
             }
             if (url.pathname === "/api/deploy" && request.method === "POST") {
-                const { type, variables, deletedVariables, targetSha } = await request.json();
-                return await handleManualDeploy(env, type, variables, deletedVariables, ACCOUNTS_KEY, targetSha);
+                const { type, variables, deletedVariables, targetSha, customCode } = await request.json();
+                return await handleManualDeploy(env, type, variables, deletedVariables, ACCOUNTS_KEY, targetSha, customCode);
             }
             if (url.pathname === "/api/batch_deploy" && request.method === "POST") {
                 const data = await request.json();
@@ -244,16 +216,34 @@ function getUploadHeaders(email, key) {
     return { "X-Auth-Email": email, "X-Auth-Key": key };
 }
 
-// [服务器端轻量混淆] 供自动更新/熔断/手动部署使用
-// 注意：不移除注释，因为正则无法区分代码注释和模板字面量中的 // 或 /* 内容
+// [服务器端反指纹混淆] 仅添加随机噪音，不修改原始代码逻辑
 function serverSideObfuscate(code) {
-    // 1. 注入 Window Polyfill
-    if (!code.includes('var window = globalThis')) {
-        code = 'var window = globalThis;\n' + code;
+    const chars = 'abcdefghijklmnopqrstuvwxyz';
+    const rs = () => Array.from({ length: 4 + Math.floor(Math.random() * 6) }, () => chars[Math.floor(Math.random() * 26)]).join('');
+    const rn = () => Math.floor(Math.random() * 99999);
+
+    // 1. 头部：注入随机块注释（绝对安全，不影响任何代码执行）
+    const commentLines = [];
+    const commentCount = 10 + Math.floor(Math.random() * 20);
+    for (let i = 0; i < commentCount; i++) {
+        commentLines.push(` * ${rs()}${rn()} ${rs()} ${rn()} ${rs()}${rn()}`);
     }
-    // 2. 压缩连续空行（安全操作，不会破坏代码结构）
-    code = code.replace(/\n{3,}/g, '\n\n');
-    return code;
+    const headerComment = `/*\n * ${rs()}${rn()}\n${commentLines.join('\n')}\n */\n`;
+
+    // 2. 尾部：注入随机 var 声明（文件末尾，不影响 export default）
+    const tailLines = [];
+    const tailCount = 10 + Math.floor(Math.random() * 15);
+    for (let i = 0; i < tailCount; i++) {
+        const vn = '_0x' + rs() + rn();
+        const patterns = [
+            `var ${vn}=${rn()};`,
+            `var ${vn}="${rs()}${rn()}";`,
+            `var ${vn}=[${rn()},${rn()}];`,
+        ];
+        tailLines.push(patterns[Math.floor(Math.random() * patterns.length)]);
+    }
+
+    return headerComment + code + '\n' + tailLines.join('\n') + '\n';
 }
 
 async function handleCronJob(env) {
@@ -394,8 +384,13 @@ async function handleCheckUpdate(env, type, mode, limit = 10) {
     } catch (e) { return new Response(JSON.stringify({ error: e.message }), { status: 500 }); }
 }
 
-async function handleManualDeploy(env, type, variables, deletedVariables, accountsKey, targetSha) {
-    // 读取自动混淆配置，手动部署也遵循此开关
+async function handleManualDeploy(env, type, variables, deletedVariables, accountsKey, targetSha, customCode) {
+    if (customCode) {
+        // 批量部署提供的前端混淆代码，直接使用
+        const result = await coreDeployLogic(env, type, variables, deletedVariables, accountsKey, targetSha, false, customCode);
+        return new Response(JSON.stringify(result), { headers: { "Content-Type": "application/json" } });
+    }
+    // 手动部署：读取自动混淆配置，用服务端反指纹混淆
     const GLOBAL_CONFIG_KEY = `AUTO_UPDATE_CFG_GLOBAL`;
     const configStr = await env.CONFIG_KV.get(GLOBAL_CONFIG_KEY);
     const doObfuscate = configStr ? !!JSON.parse(configStr).obfuscate : false;
@@ -530,7 +525,7 @@ async function handleBatchDeploy(env, reqData, accountsKey) {
 }
 
 // 核心部署逻辑 (支持服务器端混淆)
-async function coreDeployLogic(env, type, variables, deletedVariables, accountsKey, targetSha, enableServerObfuscate = false) {
+async function coreDeployLogic(env, type, variables, deletedVariables, accountsKey, targetSha, enableServerObfuscate = false, customCode = null) {
     try {
         // 规范化：'latest' 和空值统一视为“跟随最新”
         const isLatestMode = !targetSha || targetSha === 'latest';
@@ -539,25 +534,41 @@ async function coreDeployLogic(env, type, variables, deletedVariables, accountsK
         const accounts = JSON.parse(await env.CONFIG_KV.get(accountsKey) || "[]");
         if (accounts.length === 0) return [{ name: "提示", success: false, msg: "无账号配置" }];
 
-        const { scriptUrl, apiUrl } = getGithubUrls(type, shaForFetch);
         let githubScriptContent = "";
         let deployedSha = shaForFetch;
 
-        try {
-            const codeRes = await fetch(scriptUrl + `?t=${Date.now()}`);
-            if (!codeRes.ok) throw new Error(`代码下载失败: ${codeRes.status}`);
-            githubScriptContent = await codeRes.text();
-
+        if (customCode) {
+            // 前端已提供混淆后的代码，直接使用
+            githubScriptContent = customCode;
             if (!deployedSha) {
+                // 获取最新 commit SHA
+                const { apiUrl } = getGithubUrls(type, null);
                 const headers = { "User-Agent": "CF-Worker" };
                 if (env.GITHUB_TOKEN) headers["Authorization"] = `token ${env.GITHUB_TOKEN}`;
-                const apiRes = await fetch(apiUrl + `?sha=${TEMPLATES[type].ghBranch}&per_page=1`, { headers });
-                if (apiRes.ok) {
-                    const commitData = (await apiRes.json())[0];
-                    deployedSha = commitData.sha;
-                }
+                try {
+                    const apiRes = await fetch(apiUrl + `?sha=${TEMPLATES[type].ghBranch}&per_page=1`, { headers });
+                    if (apiRes.ok) deployedSha = (await apiRes.json())[0].sha;
+                } catch (e) { }
             }
-        } catch (e) { return [{ name: "网络错误", success: false, msg: e.message }]; }
+        } else {
+            // 从 GitHub 下载代码
+            const { scriptUrl, apiUrl } = getGithubUrls(type, shaForFetch);
+            try {
+                const codeRes = await fetch(scriptUrl + `?t=${Date.now()}`);
+                if (!codeRes.ok) throw new Error(`代码下载失败: ${codeRes.status}`);
+                githubScriptContent = await codeRes.text();
+
+                if (!deployedSha) {
+                    const headers = { "User-Agent": "CF-Worker" };
+                    if (env.GITHUB_TOKEN) headers["Authorization"] = `token ${env.GITHUB_TOKEN}`;
+                    const apiRes = await fetch(apiUrl + `?sha=${TEMPLATES[type].ghBranch}&per_page=1`, { headers });
+                    if (apiRes.ok) {
+                        const commitData = (await apiRes.json())[0];
+                        deployedSha = commitData.sha;
+                    }
+                }
+            } catch (e) { return [{ name: "网络错误", success: false, msg: e.message }]; }
+        }
 
         if (type === 'joey') githubScriptContent = 'var window = globalThis;\n' + githubScriptContent;
         if (type === 'ech') {
@@ -765,6 +776,14 @@ async function handleGetSubdomain(accountId, email, key) {
 async function handleChangeSubdomain(accountId, email, key, newSubdomain) {
     try {
         const headers = getAuthHeaders(email, key);
+        // Cloudflare API PUT subdomain 是 create-only，已有子域名需先 DELETE 再 PUT
+        // 先尝试删除旧子域名（可能失败，忽略错误继续）
+        try {
+            await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/subdomain`, {
+                method: 'DELETE', headers
+            });
+        } catch (e) { }
+        // 创建新子域名
         const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/subdomain`, {
             method: 'PUT',
             headers,
@@ -774,7 +793,12 @@ async function handleChangeSubdomain(accountId, email, key, newSubdomain) {
         if (data.success) {
             return new Response(JSON.stringify({ success: true, subdomain: data.result?.subdomain || newSubdomain }), { headers: { "Content-Type": "application/json" } });
         } else {
-            return new Response(JSON.stringify({ success: false, msg: data.errors?.[0]?.message || '修改失败' }), { headers: { "Content-Type": "application/json" } });
+            const errMsg = data.errors?.[0]?.message || '修改失败';
+            // 如果仍然报已存在，说明 CF 不支持通过 API 修改，提示用户去 Dashboard
+            if (errMsg.includes('already has')) {
+                return new Response(JSON.stringify({ success: false, msg: 'Cloudflare 不支持通过 API 修改已有子域名，请到 Dashboard → Workers & Pages → 设置中手动修改。' }), { headers: { "Content-Type": "application/json" } });
+            }
+            return new Response(JSON.stringify({ success: false, msg: errMsg }), { headers: { "Content-Type": "application/json" } });
         }
     } catch (e) { return new Response(JSON.stringify({ success: false, msg: e.message }), { status: 500 }); }
 }
@@ -815,7 +839,7 @@ function mainHtml() {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="manifest" href="/manifest.json">
-    <title>Worker 智能中控 (V10.2.3)</title>
+    <title>Worker 智能中控 (V10.3.3)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <script src="https://cdn.jsdelivr.net/npm/javascript-obfuscator/dist/index.browser.js"></script>
@@ -925,7 +949,7 @@ function mainHtml() {
       
       <header class="bg-white px-4 py-3 md:px-6 md:py-4 rounded shadow flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
           <div class="flex-none">
-              <h1 class="text-xl font-bold text-slate-800 flex items-center gap-2">🚀 Worker 部署中控 <span class="text-xs bg-purple-600 text-white px-2 py-0.5 rounded ml-2">V10.2.3</span></h1>
+              <h1 class="text-xl font-bold text-slate-800 flex items-center gap-2">🚀 Worker 部署中控 <span class="text-xs bg-purple-600 text-white px-2 py-0.5 rounded ml-2">V10.3.3</span></h1>
               <div class="text-[10px] text-gray-400 mt-1">安全加固 · 熔断混淆 · 子域名管理 · 星空主题</div>
           </div>
           <div id="logs" class="bg-slate-900 text-green-400 p-2 rounded text-xs font-mono hidden max-h-[80px] lg:max-h-[50px] overflow-y-auto shadow-inner w-full lg:flex-1 lg:mx-4 order-2 lg:order-none"></div>
@@ -1649,7 +1673,13 @@ function mainHtml() {
          const vars = []; document.querySelectorAll(\`.var-row-\${t}\`).forEach(r => { const k = r.querySelector('.key').value; const v = r.querySelector('.val').value; if(k) vars.push({key: k, value: v}); });
          await fetch(\`/api/settings?type=\${t}\`, {method: 'POST', body: JSON.stringify(vars)});
          const logBox = document.getElementById('logs'); logBox.classList.remove('hidden'); logBox.innerHTML = \`<div class="text-yellow-400">⚡ Deploying \${t}...</div>\`;
-         try { const res = await fetch(\`/api/deploy?type=\${t}\`, { method: 'POST', body: JSON.stringify({ type: t, variables: vars, deletedVariables: deletedVars[t], targetSha: sha }) }); const logs = await res.json(); logBox.innerHTML += logs.map(l => \`<div>[\${l.success ? 'OK' : 'ERR'}] \${l.name}: <span class="text-gray-400">\${l.msg}</span></div>\`).join(''); deletedVars[t] = []; setTimeout(() => { checkUpdate(t); checkDeployConfig(t); }, 1000); } catch(e) { logBox.innerHTML += \`<div class="text-red-500">Error: \${e.message}</div>\`; }
+         try {
+             const res = await fetch(\`/api/deploy?type=\${t}\`, { method: 'POST', body: JSON.stringify({ type: t, variables: vars, deletedVariables: deletedVars[t], targetSha: sha }) });
+             const logs = await res.json();
+             logBox.innerHTML += logs.map(l => \`<div>[\${l.success ? 'OK' : 'ERR'}] \${l.name}: <span class="text-gray-400">\${l.msg}</span></div>\`).join('');
+             deletedVars[t] = [];
+             setTimeout(() => { checkUpdate(t); checkDeployConfig(t); }, 1000);
+         } catch(e) { logBox.innerHTML += \`<div class="text-red-500">Error: \${e.message}</div>\`; }
          btn.innerText = ot; btn.disabled = false;
       }
 
